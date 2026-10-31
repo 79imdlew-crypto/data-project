@@ -48,9 +48,9 @@ def load_csv(filename):
 try:
     revenue_raw = load_csv("매출액_연도세로형.csv")
     employee_raw = load_csv("종사자수_연도세로형.csv")
-    company_raw = load_csv(
-        "애니메이션산업_지역별_연도별_사업체수_세로형(1).csv"
-    )
+   company_raw = load_csv(
+    "애니메이션산업_지역별_연도별_사업체수_세로형.csv"
+)
     job_raw = load_csv("직무별_연도세로형.csv")
 
     st.success("4개의 데이터 파일을 성공적으로 불러왔습니다.")
