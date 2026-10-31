@@ -14,7 +14,17 @@ st.set_page_config(
     layout="wide"
 )
 
-# main.py는 code 폴더에 있고 CSV는 상위 폴더의 data에 있음
+# GitHub 저장소 구조:
+# data-project/
+# ├── code/
+# │   ├── main.py
+# │   └── requirements.txt
+# └── data/
+#     ├── 매출액_연도세로형.csv
+#     ├── 종사자수_연도세로형.csv
+#     ├── 애니메이션산업_지역별_연도별_사업체수_세로형.csv
+#     └── 직무별_연도세로형.csv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
@@ -25,41 +35,49 @@ st.write(
 )
 
 st.info(
-    "이 앱은 원본 데이터와 전처리 데이터를 비교하여 "
-    "데이터 정제 과정의 필요성을 확인할 수 있도록 구성했습니다."
+    "원본 데이터와 전처리 데이터를 비교하고 "
+    "통계분석 및 시각화를 통해 데이터의 특징을 확인합니다."
 )
 
 st.divider()
 
 
 # ==========================================
-# 2. 데이터 불러오기
+# 2. CSV 파일 불러오기
 # ==========================================
 
 @st.cache_data
 def load_csv(filename):
-    path = DATA_DIR / filename
+    file_path = DATA_DIR / filename
 
-    if not path.exists():
+    if not file_path.exists():
         raise FileNotFoundError(
-            f"파일을 찾을 수 없습니다: {path}"
+            f"파일을 찾을 수 없습니다: {file_path}"
         )
 
     try:
-        return pd.read_csv(path, encoding="utf-8-sig")
+        return pd.read_csv(
+            file_path,
+            encoding="utf-8-sig"
+        )
     except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="cp949")
+        return pd.read_csv(
+            file_path,
+            encoding="cp949"
+        )
 
 
 try:
     revenue_raw = load_csv("매출액_연도세로형.csv")
     employee_raw = load_csv("종사자수_연도세로형.csv")
+
     company_raw = load_csv(
         "애니메이션산업_지역별_연도별_사업체수_세로형.csv"
     )
+
     job_raw = load_csv("직무별_연도세로형.csv")
 
-    st.success("4개의 원본 CSV 파일을 불러왔습니다.")
+    st.success("4개의 원본 데이터 파일을 불러왔습니다.")
 
 except Exception as e:
     st.error(f"데이터 불러오기 오류: {e}")
@@ -103,20 +121,11 @@ def standardize_region(value):
     return REGION_MAP.get(value, value)
 
 
-# ==========================================
-# 4. 원본 데이터 통계 확인 함수
-# ==========================================
-
-def get_original_values(df, value_column):
-    values = pd.to_numeric(
-        df[value_column], errors="coerce"
-    )
-
-    return values.dropna()
-
-
 def get_statistics(values):
-    values = pd.Series(values).dropna()
+    values = pd.to_numeric(
+        pd.Series(values),
+        errors="coerce"
+    ).dropna()
 
     if len(values) == 0:
         return {
@@ -139,7 +148,7 @@ def get_statistics(values):
 
 
 # ==========================================
-# 5. 지역별 매출액 및 종사자 수 전처리
+# 4. 지역별 매출액 및 종사자 수 전처리
 # ==========================================
 
 def clean_regional_data(df, value_name):
@@ -155,26 +164,21 @@ def clean_regional_data(df, value_name):
 
     original_count = len(df)
 
-    # 숫자 변환 전 원본 값
-    original_values = get_original_values(
-        df, "값"
-    )
+    original_values = pd.to_numeric(
+        df["값"], errors="coerce"
+    ).dropna()
 
-    # 반복된 제목 행 확인
+    # 반복된 제목 행 제거
     header_mask = (
         df["지역"].astype(str).str.strip() == "지역"
     )
 
     header_count = int(header_mask.sum())
-
     df = df[~header_mask].copy()
 
-    # 지역명 추출
+    # 실제 지역명 추출
     df["지역명"] = (
-        df["COL2"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
+        df["COL2"].fillna("").astype(str).str.strip()
     )
 
     empty_mask = df["지역명"].isin(
@@ -189,13 +193,12 @@ def clean_regional_data(df, value_name):
         standardize_region
     )
 
-    # 합계 및 소계 행 확인
+    # 합계 및 소계 제거
     aggregate_mask = df["지역명"].isin(
         AGGREGATE_NAMES
     )
 
     aggregate_count = int(aggregate_mask.sum())
-
     df = df[~aggregate_mask].copy()
 
     # 숫자형 변환
@@ -212,39 +215,34 @@ def clean_regional_data(df, value_name):
     )
 
     missing_count = int(
-        df[["지역명", "연도", value_name]].isna().any(axis=1).sum()
+        df[
+            ["지역명", "연도", value_name]
+        ].isna().any(axis=1).sum()
     )
 
     df = df.dropna(
         subset=["지역명", "연도", value_name]
     )
 
-    # 정확히 동일한 중복 행만 제거
+    # 정확히 같은 중복 행만 제거
     before_duplicates = len(df)
 
     df = df.drop_duplicates(
         subset=["지역명", "연도", value_name]
     )
 
-    exact_duplicate_count = (
+    duplicate_count = (
         before_duplicates - len(df)
     )
 
-    # 동일 지역·연도에 서로 다른 값이 있는지 확인
-    conflict_mask = df.duplicated(
-        subset=["지역명", "연도"],
-        keep=False
-    )
-
-    conflict_count = int(conflict_mask.sum())
-
-    if conflict_count > 0:
+    # 동일 지역·연도에 서로 다른 값이 있는지 검사
+    if df.duplicated(
+        subset=["지역명", "연도"]
+    ).any():
         raise ValueError(
-            f"{value_name} 데이터에서 동일 지역·연도에 "
-            "여러 값이 발견되었습니다. 원본 파일을 확인해 주세요."
+            f"{value_name} 데이터에 동일 지역·연도의 "
+            "중복 값이 있습니다. 원본 파일을 확인해 주세요."
         )
-
-    cleaned_values = df[value_name]
 
     log = {
         "원본 행 수": original_count,
@@ -252,7 +250,7 @@ def clean_regional_data(df, value_name):
         "합계·소계 행": aggregate_count,
         "숫자 변환 불가 행": invalid_count,
         "필수값 누락 행": missing_count,
-        "정확히 같은 중복 행": exact_duplicate_count,
+        "중복 행": duplicate_count,
         "전처리 후 행 수": len(df)
     }
 
@@ -260,12 +258,12 @@ def clean_regional_data(df, value_name):
         df[["지역명", "연도", value_name]].copy(),
         log,
         original_values,
-        cleaned_values
+        df[value_name]
     )
 
 
 # ==========================================
-# 6. 사업체 수 데이터 전처리
+# 5. 사업체 수 전처리
 # ==========================================
 
 def clean_company_data(df):
@@ -283,7 +281,6 @@ def clean_company_data(df):
             "사업체 데이터에 사업체수 열이 없습니다."
         )
 
-    # 실제 지역명 열 확인
     if "지역" in df.columns:
         region_column = "지역"
     elif "지역구분" in df.columns:
@@ -293,19 +290,19 @@ def clean_company_data(df):
             "사업체 데이터에서 지역 열을 찾을 수 없습니다."
         )
 
-    original_values = get_original_values(
-        df, "사업체수"
-    )
+    original_values = pd.to_numeric(
+        df["사업체수"], errors="coerce"
+    ).dropna()
 
-    # 반복 제목 행 제거
+    # 반복된 제목 행 제거
     header_mask = (
         df[region_column].astype(str).str.strip() == "지역"
     )
 
     header_count = int(header_mask.sum())
-
     df = df[~header_mask].copy()
 
+    # 지역명 표준화
     df["지역명"] = df[region_column].apply(
         standardize_region
     )
@@ -316,10 +313,9 @@ def clean_company_data(df):
     )
 
     aggregate_count = int(aggregate_mask.sum())
-
     df = df[~aggregate_mask].copy()
 
-    # 숫자 변환
+    # 숫자형 변환
     df["연도"] = pd.to_numeric(
         df["연도"], errors="coerce"
     )
@@ -333,35 +329,31 @@ def clean_company_data(df):
     )
 
     missing_count = int(
-        df[["지역명", "연도", "사업체수"]].isna().any(axis=1).sum()
+        df[
+            ["지역명", "연도", "사업체수"]
+        ].isna().any(axis=1).sum()
     )
 
     df = df.dropna(
         subset=["지역명", "연도", "사업체수"]
     )
 
-    # 정확히 동일한 중복 행 제거
     before_duplicates = len(df)
 
     df = df.drop_duplicates(
         subset=["지역명", "연도", "사업체수"]
     )
 
-    exact_duplicate_count = (
+    duplicate_count = (
         before_duplicates - len(df)
     )
 
-    conflict_mask = df.duplicated(
-        subset=["지역명", "연도"],
-        keep=False
-    )
-
-    conflict_count = int(conflict_mask.sum())
-
-    if conflict_count > 0:
+    if df.duplicated(
+        subset=["지역명", "연도"]
+    ).any():
         raise ValueError(
-            "사업체 수 데이터에서 동일 지역·연도에 "
-            "여러 값이 발견되었습니다."
+            "사업체 수 데이터에 동일 지역·연도의 "
+            "중복 값이 있습니다."
         )
 
     log = {
@@ -370,7 +362,7 @@ def clean_company_data(df):
         "합계·소계 행": aggregate_count,
         "숫자 변환 불가 행": invalid_count,
         "필수값 누락 행": missing_count,
-        "정확히 같은 중복 행": exact_duplicate_count,
+        "중복 행": duplicate_count,
         "전처리 후 행 수": len(df)
     }
 
@@ -383,7 +375,7 @@ def clean_company_data(df):
 
 
 # ==========================================
-# 7. 직무별 종사자 데이터 전처리
+# 6. 직무별 종사자 수 전처리
 # ==========================================
 
 def clean_job_data(df):
@@ -399,17 +391,16 @@ def clean_job_data(df):
                 f"직무별 데이터에 {col} 열이 없습니다."
             )
 
-    original_values = get_original_values(
-        df, "값"
-    )
+    original_values = pd.to_numeric(
+        df["값"], errors="coerce"
+    ).dropna()
 
-    # 반복 제목 행 제거
+    # 반복된 제목 행 제거
     header_mask = (
         df["직무별"].astype(str).str.strip() == "직무별"
     )
 
     header_count = int(header_mask.sum())
-
     df = df[~header_mask].copy()
 
     # 숫자형 변환
@@ -426,35 +417,31 @@ def clean_job_data(df):
     )
 
     missing_count = int(
-        df[["직무별", "연도", "종사자수"]].isna().any(axis=1).sum()
+        df[
+            ["직무별", "연도", "종사자수"]
+        ].isna().any(axis=1).sum()
     )
 
     df = df.dropna(
         subset=["직무별", "연도", "종사자수"]
     )
 
-    # 합계는 보존하되 직무 구성 그래프에서는 별도 제외
     before_duplicates = len(df)
 
     df = df.drop_duplicates(
         subset=["직무별", "연도", "종사자수"]
     )
 
-    exact_duplicate_count = (
+    duplicate_count = (
         before_duplicates - len(df)
     )
 
-    conflict_mask = df.duplicated(
-        subset=["직무별", "연도"],
-        keep=False
-    )
-
-    conflict_count = int(conflict_mask.sum())
-
-    if conflict_count > 0:
+    if df.duplicated(
+        subset=["직무별", "연도"]
+    ).any():
         raise ValueError(
-            "직무별 데이터에서 동일 직무·연도에 "
-            "여러 값이 발견되었습니다."
+            "직무별 데이터에 동일 직무·연도의 "
+            "중복 값이 있습니다."
         )
 
     log = {
@@ -462,7 +449,7 @@ def clean_job_data(df):
         "반복 제목 행": header_count,
         "숫자 변환 불가 행": invalid_count,
         "필수값 누락 행": missing_count,
-        "정확히 같은 중복 행": exact_duplicate_count,
+        "중복 행": duplicate_count,
         "전처리 후 행 수": len(df)
     }
 
@@ -475,7 +462,7 @@ def clean_job_data(df):
 
 
 # ==========================================
-# 8. 전처리 실행
+# 7. 전처리 실행
 # ==========================================
 
 try:
@@ -496,13 +483,15 @@ try:
     )
 
 except Exception as e:
-    st.error(f"전처리 과정에서 오류가 발생했습니다: {e}")
+    st.error(f"전처리 오류: {e}")
     st.stop()
 
 
 # ==========================================
-# 9. 전처리 기록 정리
+# 8. 전처리 기록
 # ==========================================
+
+st.header("1. 원본 데이터와 전처리 과정")
 
 logs = {
     "매출액": revenue_log,
@@ -513,13 +502,6 @@ logs = {
 
 log_df = pd.DataFrame(logs).T.fillna(0)
 
-st.header("1. 원본 데이터와 전처리 과정")
-
-st.write(
-    "각 원본 파일에서 어떤 행을 확인하고 처리했는지 "
-    "전처리 기록을 통해 확인할 수 있습니다."
-)
-
 st.subheader("전처리 과정 요약")
 
 st.dataframe(
@@ -527,26 +509,25 @@ st.dataframe(
     use_container_width=True
 )
 
-st.caption(
-    "반복 제목 행과 합계·소계 행을 제거하고, "
-    "숫자형 변환 및 결측값 확인을 진행했습니다. "
-    "직무별 데이터의 합계 행은 보존합니다."
+st.write(
+    "반복된 제목 행, 합계·소계 행, 숫자 변환이 불가능한 행과 "
+    "중복 자료를 확인했습니다."
 )
 
 
 # ==========================================
-# 10. 원본과 전처리 데이터 행 수 비교
+# 9. 원본과 전처리 데이터 행 수 비교
 # ==========================================
 
-st.subheader("원본과 전처리 후 데이터 개수 비교")
+st.subheader("원본과 전처리 후 행 수 비교")
 
 count_records = []
 
 for name, log in logs.items():
     count_records.append({
         "데이터": name,
-        "원본 행 수": log["원본 행 수"],
-        "전처리 후 행 수": log["전처리 후 행 수"]
+        "원본": log["원본 행 수"],
+        "전처리 후": log["전처리 후 행 수"]
     })
 
 count_df = pd.DataFrame(count_records)
@@ -574,11 +555,11 @@ st.plotly_chart(
 
 
 # ==========================================
-# 11. 원본과 전처리 후 통계 비교
+# 10. 원본과 전처리 통계 비교
 # ==========================================
 
 st.divider()
-st.header("2. 원본 데이터와 전처리 데이터의 통계 비교")
+st.header("2. 원본과 전처리 데이터 통계 비교")
 
 comparison_data = {
     "매출액": (revenue_before, revenue_after),
@@ -590,6 +571,7 @@ comparison_data = {
 comparison_rows = []
 
 for name, (before, after) in comparison_data.items():
+
     before_stats = get_statistics(before)
     after_stats = get_statistics(after)
 
@@ -615,23 +597,27 @@ st.dataframe(
     use_container_width=True
 )
 
-st.write(
-    "원본과 전처리 후의 평균, 중앙값, 표준편차 등을 비교하여 "
-    "합계·소계와 반복 제목 행의 제거가 데이터 분포에 "
-    "어떤 차이를 만드는지 확인할 수 있습니다."
+st.caption(
+    "원본과 전처리 데이터의 통계량을 비교하여 "
+    "데이터 분포의 변화를 확인합니다."
 )
 
 
 # ==========================================
-# 12. 원본과 전처리 데이터 분포 비교
+# 11. 원본과 전처리 데이터 분포 비교
 # ==========================================
 
 st.divider()
 st.header("3. 전처리 전후 데이터 분포 비교")
 
 distribution_choice = st.selectbox(
-    "비교할 데이터 선택",
-    ["매출액", "종사자 수", "사업체 수", "직무별 종사자 수"]
+    "비교할 데이터",
+    [
+        "매출액",
+        "종사자 수",
+        "사업체 수",
+        "직무별 종사자 수"
+    ]
 )
 
 before_values, after_values = comparison_data[
@@ -655,11 +641,7 @@ fig_box = px.box(
     y="값",
     color="구분",
     points="all",
-    title=f"{distribution_choice} 원본과 전처리 데이터 분포 비교",
-    labels={
-        "구분": "데이터 구분",
-        "값": distribution_choice
-    }
+    title=f"{distribution_choice} 원본과 전처리 데이터 비교"
 )
 
 st.plotly_chart(
@@ -667,21 +649,14 @@ st.plotly_chart(
     use_container_width=True
 )
 
-st.caption(
-    "원본 분포에는 합계·소계가 포함될 수 있으며, "
-    "전처리 데이터는 개별 지역 중심으로 구성됩니다. "
-    "직무별 데이터에서는 합계 행을 보존한 상태로 비교합니다."
-)
-
 
 # ==========================================
-# 13. 지역별 데이터 결합
+# 12. 지역별 데이터 결합
 # ==========================================
 
 st.divider()
 st.header("4. 지역별 데이터 통합")
 
-# 각 데이터의 지역·연도 조합을 확인하기 위한 외부 결합
 merged = pd.merge(
     revenue,
     employee,
@@ -698,37 +673,48 @@ merged = pd.merge(
     validate="one_to_one"
 )
 
-# 세 자료가 모두 존재하는 완전한 행
+# 세 자료가 모두 존재하는 행만 분석에 사용
 data = merged.dropna(
     subset=["매출액", "종사자수", "사업체수"]
 ).copy()
 
-# 자료가 하나라도 빠진 지역·연도 확인
 unmatched = merged[
-    merged[["매출액", "종사자수", "사업체수"]].isna().any(axis=1)
+    merged[
+        ["매출액", "종사자수", "사업체수"]
+    ].isna().any(axis=1)
 ].copy()
 
 st.write(
-    f"통합 결합 결과: 전체 {len(merged)}개 지역·연도 조합 중 "
-    f"{len(data)}개가 세 자료 모두 일치합니다."
+    f"전체 지역·연도 조합: {len(merged)}개"
 )
 
 st.write(
-    f"자료가 일부 일치하지 않는 조합: {len(unmatched)}개"
+    f"세 자료가 모두 일치하는 조합: {len(data)}개"
+)
+
+st.write(
+    f"일부 자료가 일치하지 않는 조합: {len(unmatched)}개"
 )
 
 if not unmatched.empty:
-    with st.expander("일치하지 않은 지역·연도 확인"):
+    with st.expander("일치하지 않은 데이터 확인"):
         st.dataframe(
             unmatched,
             use_container_width=True
         )
 
-st.write("**분석에 사용하는 통합 데이터**")
-
 data = data.sort_values(
     ["연도", "지역명"]
 ).reset_index(drop=True)
+
+if data.empty:
+    st.error(
+        "세 자료가 모두 일치하는 데이터가 없습니다. "
+        "지역명과 연도를 확인해 주세요."
+    )
+    st.stop()
+
+st.subheader("전처리된 지역별 통합 데이터")
 
 st.dataframe(
     data,
@@ -737,18 +723,11 @@ st.dataframe(
 
 
 # ==========================================
-# 14. 연도 선택
+# 13. 연도 선택 및 주요 통계
 # ==========================================
 
 st.divider()
 st.header("5. 지역별 주요 통계")
-
-if data.empty:
-    st.warning(
-        "세 자료가 모두 일치하는 지역·연도 데이터가 없어 "
-        "지역별 분석을 진행할 수 없습니다."
-    )
-    st.stop()
 
 years = sorted(data["연도"].unique())
 
@@ -761,11 +740,6 @@ selected_year = st.selectbox(
 selected_data = data[
     data["연도"] == selected_year
 ]
-
-
-# ==========================================
-# 15. 주요 지표
-# ==========================================
 
 col1, col2, col3 = st.columns(3)
 
@@ -785,13 +759,12 @@ col3.metric(
 )
 
 st.caption(
-    "개별 지역 자료의 합계입니다. 원본 통계의 전국 합계와는 "
-    "집계 범위가 다를 수 있습니다."
+    "개별 지역의 합계이며, 전국 합계와 집계 범위가 다를 수 있습니다."
 )
 
 
 # ==========================================
-# 16. 지역별 데이터 비교
+# 14. 지역별 비교 그래프
 # ==========================================
 
 st.divider()
@@ -804,7 +777,8 @@ metric = st.selectbox(
 
 fig_region = px.bar(
     selected_data.sort_values(
-        metric, ascending=False
+        metric,
+        ascending=False
     ),
     x="지역명",
     y=metric,
@@ -826,7 +800,7 @@ st.plotly_chart(
 
 
 # ==========================================
-# 17. 연도별 변화 추이
+# 15. 연도별 변화 추이
 # ==========================================
 
 st.divider()
@@ -854,7 +828,7 @@ st.plotly_chart(
 
 
 # ==========================================
-# 18. 매출액과 종사자 수의 관계
+# 16. 매출액과 종사자 수의 관계
 # ==========================================
 
 st.divider()
@@ -875,43 +849,71 @@ st.plotly_chart(
     use_container_width=True
 )
 
-# 상관계수 계산
-if len(data) >= 2:
-    pearson = data["종사자수"].corr(
-        data["매출액"],
-        method="pearson"
-    )
 
-    spearman = data["종사자수"].corr(
-        data["매출액"],
-        method="spearman"
-    )
+# ==========================================
+# 17. 상관관계 분석 (SciPy 미사용)
+# ==========================================
 
-    corr1, corr2 = st.columns(2)
+st.subheader("상관관계 통계 분석")
 
-    corr1.metric(
-        "피어슨 상관계수",
-        f"{pearson:.3f}" if pd.notna(pearson) else "계산 불가"
-    )
+# 피어슨 상관계수
+pearson = data["종사자수"].corr(
+    data["매출액"],
+    method="pearson"
+)
 
-    corr2.metric(
-        "스피어만 상관계수",
-        f"{spearman:.3f}" if pd.notna(spearman) else "계산 불가"
-    )
+# 스피어만 상관계수
+# 각 변수에 순위를 부여한 후 피어슨 상관계수를 계산
+rank_employee = data["종사자수"].rank(
+    method="average"
+)
 
-    st.write(
-        "상관계수는 두 변수의 관계를 수치로 나타냅니다. "
-        "상관관계가 높더라도 한 변수가 다른 변수의 원인이라고 "
-        "단정할 수는 없습니다."
-    )
+rank_revenue = data["매출액"].rank(
+    method="average"
+)
+
+spearman = rank_employee.corr(
+    rank_revenue,
+    method="pearson"
+)
+
+corr1, corr2 = st.columns(2)
+
+corr1.metric(
+    "피어슨 상관계수",
+    f"{pearson:.3f}" if pd.notna(pearson) else "계산 불가"
+)
+
+corr2.metric(
+    "스피어만 상관계수",
+    f"{spearman:.3f}" if pd.notna(spearman) else "계산 불가"
+)
+
+st.write(
+    "피어슨 상관계수는 두 변수의 선형 관계를, "
+    "스피어만 상관계수는 두 변수의 순위 관계를 나타냅니다."
+)
+
+st.caption(
+    "스피어만 상관계수는 각 변수에 평균 순위를 부여한 뒤 "
+    "순위 간 피어슨 상관계수를 계산하는 방식으로 구했습니다. "
+    "SciPy 라이브러리를 사용하지 않습니다."
+)
+
+st.warning(
+    "상관관계는 두 변수의 관련성을 나타낼 뿐, "
+    "인과관계를 증명하지는 않습니다. "
+    "또한 지역별 자료를 합친 결과이므로 연도와 지역의 영향을 "
+    "함께 고려해야 합니다."
+)
 
 
 # ==========================================
-# 19. 지역별 데이터 분포
+# 18. 연도별 지역 데이터 분포
 # ==========================================
 
 st.divider()
-st.header("9. 연도별 지역 데이터 분포")
+st.header("9. 지역별 데이터 분포")
 
 distribution_metric = st.selectbox(
     "분포를 확인할 항목",
@@ -934,7 +936,7 @@ st.plotly_chart(
 
 
 # ==========================================
-# 20. 직무별 종사자 현황
+# 19. 직무별 종사자 현황
 # ==========================================
 
 st.divider()
@@ -975,16 +977,14 @@ st.plotly_chart(
 
 
 # ==========================================
-# 21. 전처리 데이터 다운로드
+# 20. 전처리 데이터 다운로드
 # ==========================================
 
 st.divider()
 st.header("11. 전처리 데이터 다운로드")
 
-st.write("**지역별 통합 데이터**")
-
 st.download_button(
-    label="지역별 통합 CSV 다운로드",
+    label="지역별 통합 데이터 다운로드",
     data=data.to_csv(
         index=False,
         encoding="utf-8-sig"
@@ -993,10 +993,8 @@ st.download_button(
     mime="text/csv"
 )
 
-st.write("**직무별 종사자 데이터**")
-
 st.download_button(
-    label="직무별 CSV 다운로드",
+    label="직무별 데이터 다운로드",
     data=job.to_csv(
         index=False,
         encoding="utf-8-sig"
@@ -1007,29 +1005,32 @@ st.download_button(
 
 
 # ==========================================
-# 22. 전처리 근거 요약
+# 21. 전처리 근거
 # ==========================================
 
 st.divider()
 st.header("12. 전처리 근거 및 분석 결과")
 
 st.markdown("""
-### 전처리 기준
+### 데이터 전처리 기준
 
-1. **반복된 제목 행 제거:** 데이터 내부에 제목이 반복되어 있으면 숫자 분석에 방해가 되므로 제거했습니다.
-2. **합계·소계 행 제거:** 전국 합계나 지역 그룹의 소계는 개별 지역과 집계 범위가 다르므로 지역 간 비교에서 제외했습니다.
-3. **지역명 표준화:** 경기와 경기도처럼 같은 지역을 다르게 표현한 경우 하나의 명칭으로 통일했습니다.
-4. **숫자형 변환:** 연도와 매출액, 종사자 수, 사업체 수를 숫자로 변환하여 통계분석이 가능하도록 했습니다.
-5. **결측값 확인:** 지역명이나 연도, 분석에 필요한 수치가 없는 행은 분석에서 제외했습니다.
-6. **중복 자료 확인:** 동일한 지역과 연도에 서로 다른 수치가 존재하면 임의로 삭제하지 않고 오류를 표시하도록 했습니다.
-7. **직무별 합계 보존:** 직무별 자료의 합계는 원본 비교를 위해 보존하되, 직무별 구성 그래프에서는 제외했습니다.
+1. **반복된 제목 행 제거:** 데이터 중간에 반복된 열 제목 행을 제거했습니다.
+2. **합계·소계 행 제거:** 개별 지역 분석에 적합하지 않은 집계 행을 지역별 분석에서 제외했습니다.
+3. **지역명 표준화:** 경기와 경기도처럼 같은 지역을 다르게 표현한 경우 명칭을 통일했습니다.
+4. **숫자형 변환:** 연도와 매출액, 종사자 수, 사업체 수를 숫자형으로 변환했습니다.
+5. **결측값 확인:** 지역명이나 연도, 분석에 필요한 수치가 없는 행을 분석에서 제외했습니다.
+6. **중복 자료 확인:** 동일 지역·연도에 서로 다른 수치가 존재하는 경우 임의로 삭제하지 않고 오류를 표시하도록 했습니다.
+7. **직무별 합계 보존:** 직무별 자료의 합계는 원본 비교를 위해 보존하고 직무 구성 그래프에서는 제외했습니다.
 
 ### 전처리의 타당성 확인
 
-원본과 전처리 데이터의 행 개수, 평균, 중앙값, 표준편차 및 상자그림을 비교하여 전처리 과정에서 데이터 분포가 어떻게 달라졌는지 확인할 수 있습니다.
+원본과 전처리 데이터의 행 개수, 평균, 중앙값, 표준편차 및 상자그림을 비교하여 데이터 분포의 변화를 확인했습니다.
 
-단, 통계값이 달라졌다는 사실만으로 전처리가 옳다고 판단할 수는 없습니다. 각 행의 의미와 집계 기준을 함께 확인해야 합니다.
+단, 통계량의 변화만으로 전처리가 적절하다고 판단할 수는 없습니다. 각 행이 어떤 의미를 가지는지와 원본 통계의 집계 기준도 함께 확인해야 합니다.
+
+### 분석 시 유의사항
+
+매출액과 종사자 수의 상관계수는 두 지표의 관계를 확인하는 자료입니다. 상관관계만으로 한 지표가 다른 지표의 원인이라고 결론 내릴 수는 없습니다.
 """)
 
-st.success("원본 데이터 비교와 전처리 및 통계분석이 완료되었습니다.")
-
+st.success("원본 데이터 비교 및 전처리 분석이 완료되었습니다.")
