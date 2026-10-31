@@ -5,7 +5,7 @@ import plotly.express as px
 from pathlib import Path
 
 # =====================================
-# 1. 기본 설정
+# 1. 기본 설정 및 데이터 경로
 # =====================================
 
 st.set_page_config(
@@ -13,6 +13,10 @@ st.set_page_config(
     page_icon="🎬",
     layout="wide"
 )
+
+# main.py는 code 폴더에 있으므로 상위 폴더에서 data 폴더를 찾음
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
 
 st.title("🎬 국내 애니메이션산업 데이터 분석")
 st.write(
@@ -22,155 +26,178 @@ st.write(
 
 st.divider()
 
-# 데이터 파일 위치
-DATA_DIR = Path("data")
-
 
 # =====================================
-# 2. CSV 데이터 불러오기
+# 2. CSV 파일 불러오기
 # =====================================
 
 @st.cache_data
 def load_csv(filename):
-    path = DATA_DIR / filename
+    file_path = DATA_DIR / filename
 
-    if not path.exists():
+    if not file_path.exists():
         raise FileNotFoundError(
-            f"데이터 파일을 찾을 수 없습니다: {path}"
+            f"파일을 찾을 수 없습니다: {file_path}"
         )
 
     try:
-        return pd.read_csv(path, encoding="utf-8-sig")
+        return pd.read_csv(file_path, encoding="utf-8-sig")
     except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="cp949")
+        return pd.read_csv(file_path, encoding="cp949")
 
 
 try:
     revenue_raw = load_csv("매출액_연도세로형.csv")
     employee_raw = load_csv("종사자수_연도세로형.csv")
-   company_raw = load_csv(
-    "애니메이션산업_지역별_연도별_사업체수_세로형.csv"
-)
+    company_raw = load_csv(
+        "애니메이션산업_지역별_연도별_사업체수_세로형.csv"
+    )
     job_raw = load_csv("직무별_연도세로형.csv")
 
-    st.success("4개의 데이터 파일을 성공적으로 불러왔습니다.")
+    st.success("4개의 데이터 파일을 불러왔습니다.")
 
 except Exception as e:
     st.error(f"데이터 불러오기 오류: {e}")
+    st.info(
+        "GitHub 저장소의 data 폴더에 CSV 파일이 있는지 "
+        "파일명과 경로를 확인해 주세요."
+    )
     st.stop()
 
 
 # =====================================
-# 3. 데이터 전처리
+# 3. 공통 전처리
 # =====================================
 
-def clean_regional_data(df, value_col):
+REGION_MAP = {
+    "경기": "경기도",
+    "강원": "강원도",
+    "충북": "충청북도",
+    "충남": "충청남도",
+    "전북": "전라북도",
+    "전남": "전라남도",
+    "경북": "경상북도",
+    "경남": "경상남도",
+    "제주": "제주도"
+}
+
+EXCLUDED_REGIONS = [
+    "합계",
+    "소계",
+    "7개시",
+    "9개 도",
+    "9개도"
+]
+
+
+def standardize_region(value):
+    value = str(value).strip()
+
+    if value in ["nan", "None", ""]:
+        return None
+
+    return REGION_MAP.get(value, value)
+
+
+# =====================================
+# 4. 매출액 및 종사자 수 전처리
+# =====================================
+
+def clean_regional_data(df, value_name):
     df = df.copy()
 
     required = ["지역", "COL2", "연도", "값"]
 
-    if not all(col in df.columns for col in required):
-        raise ValueError(
-            f"지역별 데이터의 열 구성이 올바르지 않습니다: {df.columns.tolist()}"
-        )
+    for col in required:
+        if col not in df.columns:
+            raise ValueError(
+                f"{value_name} 데이터에 '{col}' 열이 없습니다."
+            )
 
     # 반복된 제목 행 제거
     df["지역"] = df["지역"].astype(str).str.strip()
     df = df[df["지역"] != "지역"]
 
-    # 지역명 통합
+    # 실제 지역명은 COL2에 있으면 COL2를 사용
     df["지역명"] = df["COL2"].fillna("").astype(str).str.strip()
 
-    df.loc[
-        df["지역명"].isin(["", "nan", "None"]),
-        "지역명"
-    ] = df["지역"]
-
-    # 지역명 표준화
-    region_map = {
-        "경기": "경기도",
-        "강원": "강원도",
-        "충북": "충청북도",
-        "충남": "충청남도",
-        "전북": "전라북도",
-        "전남": "전라남도",
-        "경북": "경상북도",
-        "경남": "경상남도",
-        "제주": "제주도"
-    }
-
-    df["지역명"] = df["지역명"].replace(region_map)
-
-    # 합계 및 소계 제거
-    excluded = [
-        "합계",
-        "소계",
-        "7개시",
-        "9개 도",
-        "9개도"
+    empty_region = df["지역명"].isin(["", "nan", "None"])
+    df.loc[empty_region, "지역명"] = df.loc[
+        empty_region, "지역"
     ]
 
-    df = df[~df["지역명"].isin(excluded)]
+    # 지역명 표준화
+    df["지역명"] = df["지역명"].apply(standardize_region)
+
+    # 합계 및 소계 제거
+    df = df[
+        ~df["지역명"].isin(EXCLUDED_REGIONS)
+    ]
 
     # 숫자형 변환
     df["연도"] = pd.to_numeric(
         df["연도"], errors="coerce"
     )
 
-    df[value_col] = pd.to_numeric(
+    df[value_name] = pd.to_numeric(
         df["값"], errors="coerce"
     )
 
     df = df.dropna(
-        subset=["지역명", "연도", value_col]
+        subset=["지역명", "연도", value_name]
     )
 
-    # 중복된 지역-연도 자료 확인
+    # 완전히 동일한 중복 행만 제거
     df = df.drop_duplicates(
-        subset=["지역명", "연도"],
-        keep="first"
+        subset=["지역명", "연도", value_name]
     )
+
+    # 지역과 연도가 같은데 값이 여러 개라면 확인 필요
+    duplicated = df.duplicated(
+        subset=["지역명", "연도"],
+        keep=False
+    )
+
+    if duplicated.any():
+        raise ValueError(
+            f"{value_name} 데이터에 동일 지역·연도의 "
+            "중복 자료가 있습니다. 원본 CSV를 확인해 주세요."
+        )
 
     return df[
-        ["지역명", "연도", value_col]
+        ["지역명", "연도", value_name]
     ]
 
+
+# =====================================
+# 5. 사업체 수 전처리
+# =====================================
 
 def clean_company_data(df):
     df = df.copy()
 
-    required = ["지역", "연도", "사업체수"]
-
-    if not all(col in df.columns for col in required):
+    if "연도" not in df.columns or "사업체수" not in df.columns:
         raise ValueError(
-            f"사업체 데이터의 열 구성이 올바르지 않습니다: {df.columns.tolist()}"
+            "사업체 수 데이터에 연도 또는 사업체수 열이 없습니다."
         )
 
-    df["지역"] = df["지역"].astype(str).str.strip()
+    # 제공된 파일 구조에 따라 지역 열 선택
+    if "지역" in df.columns:
+        region_column = "지역"
+    elif "지역구분" in df.columns:
+        region_column = "지역구분"
+    else:
+        raise ValueError(
+            "사업체 수 데이터에서 지역 열을 찾을 수 없습니다."
+        )
 
-    region_map = {
-        "경기": "경기도",
-        "강원": "강원도",
-        "충북": "충청북도",
-        "충남": "충청남도",
-        "전북": "전라북도",
-        "전남": "전라남도",
-        "경북": "경상북도",
-        "경남": "경상남도",
-        "제주": "제주도"
-    }
+    df["지역명"] = df[region_column].apply(
+        standardize_region
+    )
 
-    df["지역"] = df["지역"].replace(region_map)
-
-    excluded = [
-        "합계",
-        "소계",
-        "7개시",
-        "9개 도",
-        "9개도"
+    df = df[
+        ~df["지역명"].isin(EXCLUDED_REGIONS)
     ]
-
-    df = df[~df["지역"].isin(excluded)]
 
     df["연도"] = pd.to_numeric(
         df["연도"], errors="coerce"
@@ -181,47 +208,71 @@ def clean_company_data(df):
     )
 
     df = df.dropna(
-        subset=["지역", "연도", "사업체수"]
+        subset=["지역명", "연도", "사업체수"]
     )
 
     df = df.drop_duplicates(
-        subset=["지역", "연도"],
-        keep="first"
+        subset=["지역명", "연도", "사업체수"]
     )
 
-    return df.rename(
-        columns={"지역": "지역명"}
-    )[["지역명", "연도", "사업체수"]]
+    duplicated = df.duplicated(
+        subset=["지역명", "연도"],
+        keep=False
+    )
 
+    if duplicated.any():
+        raise ValueError(
+            "사업체 수 데이터에 동일 지역·연도의 "
+            "중복 자료가 있습니다. 원본 CSV를 확인해 주세요."
+        )
+
+    return df[
+        ["지역명", "연도", "사업체수"]
+    ]
+
+
+# =====================================
+# 6. 직무별 종사자 수 전처리
+# =====================================
 
 def clean_job_data(df):
     df = df.copy()
 
     required = ["직무별", "연도", "값"]
 
-    if not all(col in df.columns for col in required):
-        raise ValueError(
-            f"직무별 데이터의 열 구성이 올바르지 않습니다: {df.columns.tolist()}"
-        )
+    for col in required:
+        if col not in df.columns:
+            raise ValueError(
+                f"직무별 데이터에 '{col}' 열이 없습니다."
+            )
 
-    # 반복된 제목 행 제거
+    # 반복 제목 행 제거
     df["직무별"] = df["직무별"].astype(str).str.strip()
-    df = df[df["직무별"] != "직무별"]
+
+    df = df[
+        df["직무별"] != "직무별"
+    ]
 
     df["연도"] = pd.to_numeric(
         df["연도"], errors="coerce"
     )
 
-    df["값"] = pd.to_numeric(
+    df["종사자수"] = pd.to_numeric(
         df["값"], errors="coerce"
     )
 
     df = df.dropna(
-        subset=["직무별", "연도", "값"]
+        subset=["직무별", "연도", "종사자수"]
     )
 
-    return df
+    return df[
+        ["직무별", "연도", "종사자수"]
+    ]
 
+
+# =====================================
+# 7. 전처리 실행
+# =====================================
 
 try:
     revenue = clean_regional_data(
@@ -242,7 +293,7 @@ except Exception as e:
 
 
 # =====================================
-# 4. 지역별 데이터 결합
+# 8. 지역별 데이터 결합
 # =====================================
 
 data = pd.merge(
@@ -263,8 +314,8 @@ data = pd.merge(
 
 if data.empty:
     st.error(
-        "지역명과 연도가 일치하는 데이터가 없습니다. "
-        "각 CSV 파일의 지역명과 연도 형식을 확인해 주세요."
+        "결합된 데이터가 없습니다. "
+        "세 CSV 파일의 지역명과 연도를 확인해 주세요."
     )
     st.stop()
 
@@ -274,7 +325,7 @@ data = data.sort_values(
 
 
 # =====================================
-# 5. 사이드바
+# 9. 사이드바
 # =====================================
 
 st.sidebar.title("📊 분석 설정")
@@ -293,39 +344,35 @@ selected_data = data[
 
 
 # =====================================
-# 6. 주요 통계
+# 10. 주요 통계
 # =====================================
 
 st.header("1. 주요 통계")
 
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    st.metric(
-        "지역별 매출액 합계",
-        f'{selected_data["매출액"].sum():,.0f}'
-    )
+col1.metric(
+    "지역별 매출액 합계",
+    f'{selected_data["매출액"].sum():,.0f}'
+)
 
-with col2:
-    st.metric(
-        "지역별 종사자 수 합계",
-        f'{selected_data["종사자수"].sum():,.0f}명'
-    )
+col2.metric(
+    "지역별 종사자 수 합계",
+    f'{selected_data["종사자수"].sum():,.0f}명'
+)
 
-with col3:
-    st.metric(
-        "지역별 사업체 수 합계",
-        f'{selected_data["사업체수"].sum():,.0f}개'
-    )
+col3.metric(
+    "지역별 사업체 수 합계",
+    f'{selected_data["사업체수"].sum():,.0f}개'
+)
 
 st.caption(
-    "개별 지역의 값을 합산한 수치입니다. "
-    "매출액 단위는 원자료의 단위를 따릅니다."
+    "개별 지역의 합계이며, 매출액 단위는 원자료의 단위를 따릅니다."
 )
 
 
 # =====================================
-# 7. 지역별 데이터 비교
+# 11. 지역별 데이터 비교
 # =====================================
 
 st.divider()
@@ -366,7 +413,7 @@ st.plotly_chart(
 
 
 # =====================================
-# 8. 연도별 변화 추이
+# 12. 연도별 변화 추이
 # =====================================
 
 st.divider()
@@ -400,7 +447,7 @@ st.plotly_chart(
 
 
 # =====================================
-# 9. 매출액과 종사자 수의 관계
+# 13. 매출액과 종사자 수의 관계
 # =====================================
 
 st.divider()
@@ -428,13 +475,13 @@ st.plotly_chart(
 
 st.write(
     "산점도를 통해 종사자 수와 매출액 사이의 관계를 "
-    "확인할 수 있습니다. 다만 상관관계가 나타나더라도 "
-    "그것만으로 인과관계를 입증할 수는 없습니다."
+    "살펴볼 수 있습니다. 다만 상관관계만으로 "
+    "인과관계를 입증할 수는 없습니다."
 )
 
 
 # =====================================
-# 10. 데이터 분포 확인
+# 14. 데이터 분포 확인
 # =====================================
 
 st.divider()
@@ -467,7 +514,7 @@ st.plotly_chart(
 
 
 # =====================================
-# 11. 직무별 종사자 현황
+# 15. 직무별 종사자 현황
 # =====================================
 
 st.divider()
@@ -489,13 +536,13 @@ job_selected = job[
 fig5 = px.bar(
     job_selected,
     x="직무별",
-    y="값",
+    y="종사자수",
     color="직무별",
     text_auto=True,
     title=f"{selected_job_year}년 직무별 종사자 수",
     labels={
         "직무별": "직무",
-        "값": "종사자 수"
+        "종사자수": "종사자 수"
     }
 )
 
@@ -512,7 +559,7 @@ st.plotly_chart(
 
 
 # =====================================
-# 12. 전처리된 데이터 확인
+# 16. 전처리 데이터 확인 및 다운로드
 # =====================================
 
 st.divider()
@@ -554,7 +601,7 @@ st.download_button(
 
 
 # =====================================
-# 13. 데이터 정보
+# 17. 데이터 정보
 # =====================================
 
 st.divider()
@@ -567,12 +614,14 @@ with info_col1:
     st.write(f"- 행 개수: {len(data)}")
     st.write(f"- 열 개수: {len(data.columns)}")
     st.write(f"- 분석 연도: {years}")
+    st.write(f"- 분석 지역 수: {data['지역명'].nunique()}")
 
 with info_col2:
     st.write("**직무별 데이터**")
     st.write(f"- 행 개수: {len(job)}")
     st.write(f"- 열 개수: {len(job.columns)}")
-    st.write(f"- 분석 직무 수: {job['직무별'].nunique()}")
+    st.write(
+        f"- 직무 수: {job[job['직무별'] != '합계']['직무별'].nunique()}"
+    )
 
 st.success("데이터 분석이 완료되었습니다.")
-
