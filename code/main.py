@@ -4,26 +4,15 @@ import pandas as pd
 import plotly.express as px
 from pathlib import Path
 
-# ==========================================
+# =====================================================
 # 1. 기본 설정
-# ==========================================
+# =====================================================
 
 st.set_page_config(
-    page_title="애니메이션산업 데이터 분석",
+    page_title="국내 애니메이션산업 데이터 분석",
     page_icon="🎬",
     layout="wide"
 )
-
-# GitHub 저장소 구조:
-# data-project/
-# ├── code/
-# │   ├── main.py
-# │   └── requirements.txt
-# └── data/
-#     ├── 매출액_연도세로형.csv
-#     ├── 종사자수_연도세로형.csv
-#     ├── 애니메이션산업_지역별_연도별_사업체수_세로형.csv
-#     └── 직무별_연도세로형.csv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -31,62 +20,57 @@ DATA_DIR = BASE_DIR / "data"
 st.title("🎬 국내 애니메이션산업 데이터 분석")
 st.write(
     "2020~2022년 국내 애니메이션산업의 지역별 매출액, "
-    "종사자 수, 사업체 수 및 직무별 종사자 현황을 분석합니다."
+    "종사자 수, 사업체 수 및 직무별 인력 구조를 분석합니다."
 )
 
 st.info(
-    "원본 데이터와 전처리 데이터를 비교하고 "
-    "통계분석 및 시각화를 통해 데이터의 특징을 확인합니다."
+    "원본 데이터 전처리부터 데이터 시각화, 통계분석, "
+    "탐구 주제에 따른 해석까지 진행하는 분석 프로그램입니다."
 )
 
-st.divider()
 
-
-# ==========================================
-# 2. CSV 파일 불러오기
-# ==========================================
+# =====================================================
+# 2. 데이터 파일 불러오기
+# =====================================================
 
 @st.cache_data
 def load_csv(filename):
-    file_path = DATA_DIR / filename
+    path = DATA_DIR / filename
 
-    if not file_path.exists():
+    if not path.exists():
         raise FileNotFoundError(
-            f"파일을 찾을 수 없습니다: {file_path}"
+            f"파일을 찾을 수 없습니다: {path}"
         )
 
     try:
-        return pd.read_csv(
-            file_path,
-            encoding="utf-8-sig"
-        )
+        return pd.read_csv(path, encoding="utf-8-sig")
     except UnicodeDecodeError:
-        return pd.read_csv(
-            file_path,
-            encoding="cp949"
-        )
+        return pd.read_csv(path, encoding="cp949")
 
 
 try:
     revenue_raw = load_csv("매출액_연도세로형.csv")
     employee_raw = load_csv("종사자수_연도세로형.csv")
-
     company_raw = load_csv(
         "애니메이션산업_지역별_연도별_사업체수_세로형.csv"
     )
-
     job_raw = load_csv("직무별_연도세로형.csv")
 
     st.success("4개의 원본 데이터 파일을 불러왔습니다.")
 
 except Exception as e:
-    st.error(f"데이터 불러오기 오류: {e}")
+    st.error(f"데이터 파일 오류: {e}")
+    st.write("현재 data 폴더의 파일 목록:")
+
+    if DATA_DIR.exists():
+        st.write([p.name for p in DATA_DIR.iterdir()])
+
     st.stop()
 
 
-# ==========================================
-# 3. 공통 설정
-# ==========================================
+# =====================================================
+# 3. 공통 함수
+# =====================================================
 
 REGION_MAP = {
     "경기": "경기도",
@@ -99,14 +83,6 @@ REGION_MAP = {
     "경남": "경상남도",
     "제주": "제주도"
 }
-
-AGGREGATE_NAMES = [
-    "합계",
-    "소계",
-    "7개시",
-    "9개 도",
-    "9개도"
-]
 
 
 def standardize_region(value):
@@ -121,35 +97,99 @@ def standardize_region(value):
     return REGION_MAP.get(value, value)
 
 
-def get_statistics(values):
-    values = pd.to_numeric(
-        pd.Series(values),
+def is_aggregate(value):
+    if pd.isna(value):
+        return True
+
+    value = str(value).strip()
+
+    # 합계 및 소계 등 집계 행 제외
+    if "합계" in value or "소계" in value:
+        return True
+
+    if value in ["7개시", "9개 도", "9개도"]:
+        return True
+
+    return False
+
+
+def numeric_values(series):
+    return pd.to_numeric(
+        series,
         errors="coerce"
     ).dropna()
 
-    if len(values) == 0:
-        return {
-            "데이터 개수": 0,
-            "평균": None,
-            "중앙값": None,
-            "표준편차": None,
-            "최솟값": None,
-            "최댓값": None
-        }
 
-    return {
-        "데이터 개수": len(values),
-        "평균": values.mean(),
-        "중앙값": values.median(),
-        "표준편차": values.std(),
-        "최솟값": values.min(),
-        "최댓값": values.max()
-    }
+def safe_corr(x, y, method="pearson"):
+    temp = pd.DataFrame({
+        "x": x,
+        "y": y
+    }).dropna()
+
+    if len(temp) < 3:
+        return None
+
+    if temp["x"].nunique() < 2:
+        return None
+
+    if temp["y"].nunique() < 2:
+        return None
+
+    if method == "spearman":
+        # SciPy 없이 스피어만 상관계수 계산
+        x_rank = temp["x"].rank(method="average")
+        y_rank = temp["y"].rank(method="average")
+
+        return x_rank.corr(y_rank, method="pearson")
+
+    return temp["x"].corr(
+        temp["y"],
+        method="pearson"
+    )
 
 
-# ==========================================
+def corr_description(value):
+    if value is None or pd.isna(value):
+        return "데이터가 부족하거나 값의 변동이 없어 상관관계를 계산할 수 없습니다."
+
+    if value >= 0.7:
+        return "강한 양의 상관관계"
+    elif value >= 0.4:
+        return "중간 정도의 양의 상관관계"
+    elif value > 0:
+        return "약한 양의 상관관계"
+    elif value <= -0.7:
+        return "강한 음의 상관관계"
+    elif value <= -0.4:
+        return "중간 정도의 음의 상관관계"
+    elif value < 0:
+        return "약한 음의 상관관계"
+
+    return "뚜렷한 선형 상관관계가 거의 없음"
+
+
+def format_number(value):
+    if value is None or pd.isna(value):
+        return "계산 불가"
+
+    return f"{value:,.2f}"
+
+
+def format_change(value):
+    if value is None or pd.isna(value):
+        return "계산 불가"
+
+    if value > 0:
+        return f"{value:.1f}% 증가"
+    elif value < 0:
+        return f"{abs(value):.1f}% 감소"
+
+    return "변화 없음"
+
+
+# =====================================================
 # 4. 지역별 매출액 및 종사자 수 전처리
-# ==========================================
+# =====================================================
 
 def clean_regional_data(df, value_name):
     df = df.copy()
@@ -164,11 +204,9 @@ def clean_regional_data(df, value_name):
 
     original_count = len(df)
 
-    original_values = pd.to_numeric(
-        df["값"], errors="coerce"
-    ).dropna()
+    original_values = numeric_values(df["값"])
 
-    # 반복된 제목 행 제거
+    # 반복 제목 행 제거
     header_mask = (
         df["지역"].astype(str).str.strip() == "지역"
     )
@@ -193,9 +231,9 @@ def clean_regional_data(df, value_name):
         standardize_region
     )
 
-    # 합계 및 소계 제거
-    aggregate_mask = df["지역명"].isin(
-        AGGREGATE_NAMES
+    # 집계 행 제거
+    aggregate_mask = df["지역명"].apply(
+        is_aggregate
     )
 
     aggregate_count = int(aggregate_mask.sum())
@@ -224,24 +262,22 @@ def clean_regional_data(df, value_name):
         subset=["지역명", "연도", value_name]
     )
 
-    # 정확히 같은 중복 행만 제거
-    before_duplicates = len(df)
+    # 완전히 동일한 행만 제거
+    before = len(df)
 
     df = df.drop_duplicates(
         subset=["지역명", "연도", value_name]
     )
 
-    duplicate_count = (
-        before_duplicates - len(df)
-    )
+    duplicate_count = before - len(df)
 
-    # 동일 지역·연도에 서로 다른 값이 있는지 검사
+    # 같은 지역과 연도에 서로 다른 값이 있으면 오류
     if df.duplicated(
         subset=["지역명", "연도"]
     ).any():
         raise ValueError(
-            f"{value_name} 데이터에 동일 지역·연도의 "
-            "중복 값이 있습니다. 원본 파일을 확인해 주세요."
+            f"{value_name}에 동일 지역·연도의 "
+            "서로 다른 값이 있습니다."
         )
 
     log = {
@@ -262,39 +298,29 @@ def clean_regional_data(df, value_name):
     )
 
 
-# ==========================================
+# =====================================================
 # 5. 사업체 수 전처리
-# ==========================================
+# =====================================================
 
 def clean_company_data(df):
     df = df.copy()
 
     original_count = len(df)
 
-    if "연도" not in df.columns:
-        raise ValueError(
-            "사업체 데이터에 연도 열이 없습니다."
-        )
+    region_column = (
+        "지역" if "지역" in df.columns
+        else "지역구분"
+    )
 
-    if "사업체수" not in df.columns:
-        raise ValueError(
-            "사업체 데이터에 사업체수 열이 없습니다."
-        )
+    if region_column not in df.columns:
+        raise ValueError("사업체 수 데이터의 지역 열을 찾을 수 없습니다.")
 
-    if "지역" in df.columns:
-        region_column = "지역"
-    elif "지역구분" in df.columns:
-        region_column = "지역구분"
-    else:
-        raise ValueError(
-            "사업체 데이터에서 지역 열을 찾을 수 없습니다."
-        )
+    if "연도" not in df.columns or "사업체수" not in df.columns:
+        raise ValueError("사업체 수 데이터의 필수 열을 찾을 수 없습니다.")
 
-    original_values = pd.to_numeric(
-        df["사업체수"], errors="coerce"
-    ).dropna()
+    original_values = numeric_values(df["사업체수"])
 
-    # 반복된 제목 행 제거
+    # 반복 제목 행 제거
     header_mask = (
         df[region_column].astype(str).str.strip() == "지역"
     )
@@ -302,20 +328,17 @@ def clean_company_data(df):
     header_count = int(header_mask.sum())
     df = df[~header_mask].copy()
 
-    # 지역명 표준화
     df["지역명"] = df[region_column].apply(
         standardize_region
     )
 
-    # 합계 및 소계 제거
-    aggregate_mask = df["지역명"].isin(
-        AGGREGATE_NAMES
+    aggregate_mask = df["지역명"].apply(
+        is_aggregate
     )
 
     aggregate_count = int(aggregate_mask.sum())
     df = df[~aggregate_mask].copy()
 
-    # 숫자형 변환
     df["연도"] = pd.to_numeric(
         df["연도"], errors="coerce"
     )
@@ -338,22 +361,20 @@ def clean_company_data(df):
         subset=["지역명", "연도", "사업체수"]
     )
 
-    before_duplicates = len(df)
+    before = len(df)
 
     df = df.drop_duplicates(
         subset=["지역명", "연도", "사업체수"]
     )
 
-    duplicate_count = (
-        before_duplicates - len(df)
-    )
+    duplicate_count = before - len(df)
 
     if df.duplicated(
         subset=["지역명", "연도"]
     ).any():
         raise ValueError(
             "사업체 수 데이터에 동일 지역·연도의 "
-            "중복 값이 있습니다."
+            "서로 다른 값이 있습니다."
         )
 
     log = {
@@ -374,9 +395,9 @@ def clean_company_data(df):
     )
 
 
-# ==========================================
+# =====================================================
 # 6. 직무별 종사자 수 전처리
-# ==========================================
+# =====================================================
 
 def clean_job_data(df):
     df = df.copy()
@@ -391,11 +412,8 @@ def clean_job_data(df):
                 f"직무별 데이터에 {col} 열이 없습니다."
             )
 
-    original_values = pd.to_numeric(
-        df["값"], errors="coerce"
-    ).dropna()
+    original_values = numeric_values(df["값"])
 
-    # 반복된 제목 행 제거
     header_mask = (
         df["직무별"].astype(str).str.strip() == "직무별"
     )
@@ -403,7 +421,6 @@ def clean_job_data(df):
     header_count = int(header_mask.sum())
     df = df[~header_mask].copy()
 
-    # 숫자형 변환
     df["연도"] = pd.to_numeric(
         df["연도"], errors="coerce"
     )
@@ -426,22 +443,20 @@ def clean_job_data(df):
         subset=["직무별", "연도", "종사자수"]
     )
 
-    before_duplicates = len(df)
+    before = len(df)
 
     df = df.drop_duplicates(
         subset=["직무별", "연도", "종사자수"]
     )
 
-    duplicate_count = (
-        before_duplicates - len(df)
-    )
+    duplicate_count = before - len(df)
 
     if df.duplicated(
         subset=["직무별", "연도"]
     ).any():
         raise ValueError(
             "직무별 데이터에 동일 직무·연도의 "
-            "중복 값이 있습니다."
+            "서로 다른 값이 있습니다."
         )
 
     log = {
@@ -461,9 +476,9 @@ def clean_job_data(df):
     )
 
 
-# ==========================================
+# =====================================================
 # 7. 전처리 실행
-# ==========================================
+# =====================================================
 
 try:
     revenue, revenue_log, revenue_before, revenue_after = (
@@ -483,15 +498,15 @@ try:
     )
 
 except Exception as e:
-    st.error(f"전처리 오류: {e}")
+    st.error(f"데이터 전처리 오류: {e}")
     st.stop()
 
 
-# ==========================================
-# 8. 전처리 기록
-# ==========================================
+# =====================================================
+# 8. 전처리 결과 요약
+# =====================================================
 
-st.header("1. 원본 데이터와 전처리 과정")
+st.header("1. 데이터 전처리 결과")
 
 logs = {
     "매출액": revenue_log,
@@ -502,24 +517,10 @@ logs = {
 
 log_df = pd.DataFrame(logs).T.fillna(0)
 
-st.subheader("전처리 과정 요약")
-
 st.dataframe(
     log_df,
     use_container_width=True
 )
-
-st.write(
-    "반복된 제목 행, 합계·소계 행, 숫자 변환이 불가능한 행과 "
-    "중복 자료를 확인했습니다."
-)
-
-
-# ==========================================
-# 9. 원본과 전처리 데이터 행 수 비교
-# ==========================================
-
-st.subheader("원본과 전처리 후 행 수 비교")
 
 count_records = []
 
@@ -548,18 +549,61 @@ fig_count = px.bar(
     title="원본과 전처리 후 데이터 행 수 비교"
 )
 
-st.plotly_chart(
-    fig_count,
-    use_container_width=True
+st.plotly_chart(fig_count, use_container_width=True)
+
+st.write(
+    "반복 제목 행과 집계 행 등을 구분하여 개별 지역 분석에 "
+    "적합한 형태로 정리했습니다."
 )
 
 
-# ==========================================
-# 10. 원본과 전처리 통계 비교
-# ==========================================
+# =====================================================
+# 9. 데이터 속성 및 유형 안내
+# =====================================================
 
 st.divider()
-st.header("2. 원본과 전처리 데이터 통계 비교")
+st.header("2. 데이터 속성별 유형 및 시각화 방법")
+
+type_df = pd.DataFrame([
+    {
+        "데이터": "지역별 매출액",
+        "속성": "지역, 연도, 매출액",
+        "유형": "범주형, 시계열형, 수치형",
+        "시각화": "막대그래프, 선그래프, 산점도",
+        "파악할 내용": "지역별 매출 규모와 연도별 변화"
+    },
+    {
+        "데이터": "지역별 종사자 수",
+        "속성": "지역, 연도, 종사자 수",
+        "유형": "범주형, 시계열형, 이산형 수치",
+        "시각화": "막대그래프, 선그래프, 상자그림",
+        "파악할 내용": "지역별 고용 규모와 분포"
+    },
+    {
+        "데이터": "지역별 사업체 수",
+        "속성": "지역, 연도, 사업체 수",
+        "유형": "범주형, 시계열형, 이산형 수치",
+        "시각화": "막대그래프, 선그래프, 산점도",
+        "파악할 내용": "사업체의 지역별 분포와 변화"
+    },
+    {
+        "데이터": "직무별 종사자 수",
+        "속성": "직무, 연도, 종사자 수",
+        "유형": "범주형, 시계열형, 이산형 수치",
+        "시각화": "막대그래프, 누적 막대그래프",
+        "파악할 내용": "직무별 인력 구성과 변화"
+    }
+])
+
+st.dataframe(type_df, use_container_width=True)
+
+
+# =====================================================
+# 10. 원본과 전처리 데이터 통계 비교
+# =====================================================
+
+st.divider()
+st.header("3. 원본과 전처리 데이터 통계 비교")
 
 comparison_data = {
     "매출액": (revenue_before, revenue_after),
@@ -571,23 +615,19 @@ comparison_data = {
 comparison_rows = []
 
 for name, (before, after) in comparison_data.items():
-
-    before_stats = get_statistics(before)
-    after_stats = get_statistics(after)
-
-    for stat_name in [
-        "데이터 개수",
-        "평균",
-        "중앙값",
-        "표준편차",
-        "최솟값",
-        "최댓값"
+    for label, series in [
+        ("원본", before),
+        ("전처리 후", after)
     ]:
         comparison_rows.append({
             "데이터": name,
-            "통계 항목": stat_name,
-            "원본": before_stats[stat_name],
-            "전처리 후": after_stats[stat_name]
+            "구분": label,
+            "개수": len(series),
+            "평균": series.mean() if len(series) else None,
+            "중앙값": series.median() if len(series) else None,
+            "표준편차": series.std() if len(series) else None,
+            "최솟값": series.min() if len(series) else None,
+            "최댓값": series.max() if len(series) else None
         })
 
 comparison_df = pd.DataFrame(comparison_rows)
@@ -597,65 +637,50 @@ st.dataframe(
     use_container_width=True
 )
 
-st.caption(
-    "원본과 전처리 데이터의 통계량을 비교하여 "
-    "데이터 분포의 변화를 확인합니다."
+selected_comparison = st.selectbox(
+    "분포 비교 데이터 선택",
+    list(comparison_data.keys())
 )
 
+before, after = comparison_data[selected_comparison]
 
-# ==========================================
-# 11. 원본과 전처리 데이터 분포 비교
-# ==========================================
-
-st.divider()
-st.header("3. 전처리 전후 데이터 분포 비교")
-
-distribution_choice = st.selectbox(
-    "비교할 데이터",
-    [
-        "매출액",
-        "종사자 수",
-        "사업체 수",
-        "직무별 종사자 수"
-    ]
-)
-
-before_values, after_values = comparison_data[
-    distribution_choice
-]
-
-box_data = pd.concat([
+distribution_df = pd.concat([
     pd.DataFrame({
-        "구분": "원본 데이터",
-        "값": before_values
+        "구분": "원본",
+        "값": before
     }),
     pd.DataFrame({
-        "구분": "전처리 데이터",
-        "값": after_values
+        "구분": "전처리 후",
+        "값": after
     })
 ], ignore_index=True)
 
-fig_box = px.box(
-    box_data,
+fig_comparison = px.box(
+    distribution_df,
     x="구분",
     y="값",
     color="구분",
     points="all",
-    title=f"{distribution_choice} 원본과 전처리 데이터 비교"
+    title=f"{selected_comparison} 원본과 전처리 후 분포 비교"
 )
 
 st.plotly_chart(
-    fig_box,
+    fig_comparison,
     use_container_width=True
 )
 
+st.caption(
+    "원본에는 합계·소계 등이 포함될 수 있으므로 "
+    "두 분포의 차이는 집계 행 제거 등의 영향을 받을 수 있습니다."
+)
 
-# ==========================================
-# 12. 지역별 데이터 결합
-# ==========================================
+
+# =====================================================
+# 11. 지역별 데이터 통합
+# =====================================================
 
 st.divider()
-st.header("4. 지역별 데이터 통합")
+st.header("4. 지역별 통합 데이터")
 
 merged = pd.merge(
     revenue,
@@ -673,7 +698,6 @@ merged = pd.merge(
     validate="one_to_one"
 )
 
-# 세 자료가 모두 존재하는 행만 분석에 사용
 data = merged.dropna(
     subset=["매출액", "종사자수", "사업체수"]
 ).copy()
@@ -684,24 +708,13 @@ unmatched = merged[
     ].isna().any(axis=1)
 ].copy()
 
-st.write(
-    f"전체 지역·연도 조합: {len(merged)}개"
-)
-
-st.write(
-    f"세 자료가 모두 일치하는 조합: {len(data)}개"
-)
-
-st.write(
-    f"일부 자료가 일치하지 않는 조합: {len(unmatched)}개"
-)
+st.write(f"전체 지역·연도 조합: {len(merged)}개")
+st.write(f"세 자료가 모두 일치하는 조합: {len(data)}개")
+st.write(f"일부 자료가 누락된 조합: {len(unmatched)}개")
 
 if not unmatched.empty:
-    with st.expander("일치하지 않은 데이터 확인"):
-        st.dataframe(
-            unmatched,
-            use_container_width=True
-        )
+    with st.expander("일부 자료가 누락된 조합 확인"):
+        st.dataframe(unmatched, use_container_width=True)
 
 data = data.sort_values(
     ["연도", "지역명"]
@@ -709,127 +722,222 @@ data = data.sort_values(
 
 if data.empty:
     st.error(
-        "세 자료가 모두 일치하는 데이터가 없습니다. "
+        "세 자료가 모두 일치하는 지역·연도 조합이 없습니다. "
         "지역명과 연도를 확인해 주세요."
     )
     st.stop()
 
-st.subheader("전처리된 지역별 통합 데이터")
-
-st.dataframe(
-    data,
-    use_container_width=True
-)
+st.dataframe(data, use_container_width=True)
 
 
-# ==========================================
-# 13. 연도 선택 및 주요 통계
-# ==========================================
+# =====================================================
+# 12. 지역별 연도별 합계 및 변화 분석
+# =====================================================
 
 st.divider()
-st.header("5. 지역별 주요 통계")
+st.header("5. 연도별 산업 규모 변화")
 
-years = sorted(data["연도"].unique())
+# 개별 지역 자료의 합계
+yearly = (
+    data.groupby("연도")[
+        ["매출액", "종사자수", "사업체수"]
+    ]
+    .sum()
+    .reset_index()
+    .sort_values("연도")
+)
+
+st.write(
+    "아래 합계는 통합된 개별 지역 자료의 합입니다. "
+    "원본의 전국 합계 행과 집계 범위가 다를 수 있습니다."
+)
+
+st.dataframe(yearly, use_container_width=True)
+
+metric_choice = st.selectbox(
+    "연도별 변화 확인",
+    ["매출액", "종사자수", "사업체수"]
+)
+
+fig_yearly = px.line(
+    yearly,
+    x="연도",
+    y=metric_choice,
+    markers=True,
+    text=metric_choice,
+    title=f"연도별 {metric_choice} 합계 변화"
+)
+
+st.plotly_chart(fig_yearly, use_container_width=True)
+
+if len(yearly) >= 2:
+    first = yearly.iloc[0]
+    last = yearly.iloc[-1]
+
+    start_value = first[metric_choice]
+    end_value = last[metric_choice]
+
+    if start_value != 0:
+        change = (
+            (end_value - start_value)
+            / abs(start_value) * 100
+        )
+    else:
+        change = None
+
+    st.subheader("연도별 변화 해석")
+
+    st.write(
+        f"{int(first['연도'])}년부터 {int(last['연도'])}년까지 "
+        f"{metric_choice}은 "
+        f"{format_change(change)} 했습니다."
+    )
+
+    if end_value > start_value:
+        st.success(
+            f"분석 대상 지역의 {metric_choice} 합계가 "
+            "증가하는 흐름을 보였습니다."
+        )
+    elif end_value < start_value:
+        st.warning(
+            f"분석 대상 지역의 {metric_choice} 합계가 "
+            "감소하는 흐름을 보였습니다."
+        )
+    else:
+        st.info(
+            f"분석 대상 지역의 {metric_choice} 합계는 "
+            "시작 연도와 마지막 연도에 같은 수준입니다."
+        )
+
+
+# =====================================================
+# 13. 지역별 비교
+# =====================================================
+
+st.divider()
+st.header("6. 지역별 규모 비교")
 
 selected_year = st.selectbox(
-    "분석 연도 선택",
-    years,
-    index=len(years) - 1
+    "비교할 연도",
+    sorted(data["연도"].unique()),
+    key="region_year"
 )
 
 selected_data = data[
     data["연도"] == selected_year
-]
+].copy()
 
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "지역별 매출액 합계",
-    f'{selected_data["매출액"].sum():,.0f}'
-)
-
-col2.metric(
-    "지역별 종사자 수 합계",
-    f'{selected_data["종사자수"].sum():,.0f}명'
-)
-
-col3.metric(
-    "지역별 사업체 수 합계",
-    f'{selected_data["사업체수"].sum():,.0f}개'
-)
-
-st.caption(
-    "개별 지역의 합계이며, 전국 합계와 집계 범위가 다를 수 있습니다."
-)
-
-
-# ==========================================
-# 14. 지역별 비교 그래프
-# ==========================================
-
-st.divider()
-st.header("6. 지역별 데이터 비교")
-
-metric = st.selectbox(
+region_metric = st.selectbox(
     "비교할 항목",
-    ["매출액", "종사자수", "사업체수"]
+    ["매출액", "종사자수", "사업체수"],
+    key="region_metric"
+)
+
+region_sorted = selected_data.sort_values(
+    region_metric,
+    ascending=False
 )
 
 fig_region = px.bar(
-    selected_data.sort_values(
-        metric,
-        ascending=False
-    ),
+    region_sorted,
     x="지역명",
-    y=metric,
+    y=region_metric,
     color="지역명",
     text_auto=".2s",
-    title=f"{selected_year}년 지역별 {metric} 비교"
+    title=f"{int(selected_year)}년 지역별 {region_metric} 비교"
 )
 
-fig_region.update_layout(
-    showlegend=False,
-    xaxis_title="지역",
-    yaxis_title=metric
-)
+fig_region.update_layout(showlegend=False)
 
-st.plotly_chart(
-    fig_region,
-    use_container_width=True
-)
+st.plotly_chart(fig_region, use_container_width=True)
+
+if not region_sorted.empty:
+    highest = region_sorted.iloc[0]
+    lowest = region_sorted.iloc[-1]
+
+    st.subheader("지역별 비교 해석")
+
+    st.write(
+        f"{int(selected_year)}년 {region_metric}이 가장 높은 지역은 "
+        f"{highest['지역명']}이며, 값은 "
+        f"{format_number(highest[region_metric])}입니다."
+    )
+
+    st.write(
+        f"가장 낮은 지역은 {lowest['지역명']}이며, 값은 "
+        f"{format_number(lowest[region_metric])}입니다."
+    )
+
+    st.write(
+        "지역별 값의 차이를 통해 산업 규모가 지역에 따라 "
+        "다르게 분포하는지 확인할 수 있습니다."
+    )
 
 
-# ==========================================
-# 15. 연도별 변화 추이
-# ==========================================
+# =====================================================
+# 14. 지역별 분포 분석
+# =====================================================
 
 st.divider()
-st.header("7. 연도별 변화 추이")
+st.header("7. 지역별 데이터 분포 분석")
 
-trend_metric = st.selectbox(
-    "변화 추이를 확인할 항목",
+box_metric = st.selectbox(
+    "분포를 확인할 항목",
     ["매출액", "종사자수", "사업체수"],
-    key="trend"
+    key="box_metric"
 )
 
-fig_trend = px.line(
+fig_box = px.box(
     data,
     x="연도",
-    y=trend_metric,
-    color="지역명",
-    markers=True,
-    title=f"지역별 {trend_metric} 변화 추이"
+    y=box_metric,
+    points="all",
+    title=f"연도별 지역 {box_metric} 분포"
 )
 
-st.plotly_chart(
-    fig_trend,
-    use_container_width=True
+st.plotly_chart(fig_box, use_container_width=True)
+
+st.write(
+    "상자그림에서 중앙값, 사분위 범위와 이상치 등을 확인하여 "
+    "지역별 값의 차이와 분포 변화를 살펴볼 수 있습니다."
 )
 
+box_stats = (
+    data.groupby("연도")[box_metric]
+    .agg(["median", "min", "max"])
+    .reset_index()
+)
 
-# ==========================================
-# 16. 매출액과 종사자 수의 관계
-# ==========================================
+box_stats["범위"] = (
+    box_stats["max"] - box_stats["min"]
+)
+
+st.dataframe(box_stats, use_container_width=True)
+
+if len(box_stats) >= 2:
+    first_range = box_stats.iloc[0]["범위"]
+    last_range = box_stats.iloc[-1]["범위"]
+
+    if last_range > first_range:
+        st.write(
+            "첫 연도와 마지막 연도를 비교하면 지역별 최댓값과 "
+            "최솟값의 차이가 커졌습니다."
+        )
+    elif last_range < first_range:
+        st.write(
+            "첫 연도와 마지막 연도를 비교하면 지역별 최댓값과 "
+            "최솟값의 차이가 작아졌습니다."
+        )
+    else:
+        st.write(
+            "첫 연도와 마지막 연도의 지역별 최댓값과 "
+            "최솟값의 차이가 같습니다."
+        )
+
+
+# =====================================================
+# 15. 매출액과 종사자 수의 관계
+# =====================================================
 
 st.divider()
 st.header("8. 매출액과 종사자 수의 관계")
@@ -839,152 +947,462 @@ fig_scatter = px.scatter(
     x="종사자수",
     y="매출액",
     color="연도",
-    size="사업체수",
     hover_name="지역명",
+    size="사업체수",
     title="지역별 종사자 수와 매출액의 관계"
 )
 
-st.plotly_chart(
-    fig_scatter,
-    use_container_width=True
-)
+st.plotly_chart(fig_scatter, use_container_width=True)
 
-
-# ==========================================
-# 17. 상관관계 분석 (SciPy 미사용)
-# ==========================================
-
-st.subheader("상관관계 통계 분석")
-
-# 피어슨 상관계수
-pearson = data["종사자수"].corr(
+pearson = safe_corr(
+    data["종사자수"],
     data["매출액"],
-    method="pearson"
+    "pearson"
 )
 
-# 스피어만 상관계수
-# 각 변수에 순위를 부여한 후 피어슨 상관계수를 계산
-rank_employee = data["종사자수"].rank(
-    method="average"
+spearman = safe_corr(
+    data["종사자수"],
+    data["매출액"],
+    "spearman"
 )
 
-rank_revenue = data["매출액"].rank(
-    method="average"
-)
+col1, col2 = st.columns(2)
 
-spearman = rank_employee.corr(
-    rank_revenue,
-    method="pearson"
-)
-
-corr1, corr2 = st.columns(2)
-
-corr1.metric(
+col1.metric(
     "피어슨 상관계수",
-    f"{pearson:.3f}" if pd.notna(pearson) else "계산 불가"
+    format_number(pearson)
 )
 
-corr2.metric(
+col2.metric(
     "스피어만 상관계수",
-    f"{spearman:.3f}" if pd.notna(spearman) else "계산 불가"
+    format_number(spearman)
+)
+
+st.subheader("매출액과 종사자 수 해석")
+
+st.write(
+    "피어슨 상관계수: "
+    + corr_description(pearson)
 )
 
 st.write(
-    "피어슨 상관계수는 두 변수의 선형 관계를, "
-    "스피어만 상관계수는 두 변수의 순위 관계를 나타냅니다."
+    "스피어만 상관계수: "
+    + corr_description(spearman)
 )
 
-st.caption(
-    "스피어만 상관계수는 각 변수에 평균 순위를 부여한 뒤 "
-    "순위 간 피어슨 상관계수를 계산하는 방식으로 구했습니다. "
-    "SciPy 라이브러리를 사용하지 않습니다."
-)
+if pearson is not None:
+    if pearson > 0:
+        st.write(
+            "종사자 수가 많은 지역일수록 매출액도 높은 "
+            "경향이 나타났습니다."
+        )
+    elif pearson < 0:
+        st.write(
+            "종사자 수가 많은 지역일수록 매출액이 낮은 "
+            "경향이 나타났습니다."
+        )
+    else:
+        st.write(
+            "두 변수 사이에 뚜렷한 선형 관계가 나타나지 않았습니다."
+        )
 
 st.warning(
-    "상관관계는 두 변수의 관련성을 나타낼 뿐, "
-    "인과관계를 증명하지는 않습니다. "
-    "또한 지역별 자료를 합친 결과이므로 연도와 지역의 영향을 "
-    "함께 고려해야 합니다."
+    "상관관계는 두 변수의 관련성을 나타내며, "
+    "한 변수가 다른 변수의 원인이라는 것을 증명하지 않습니다."
 )
 
 
-# ==========================================
-# 18. 연도별 지역 데이터 분포
-# ==========================================
+# =====================================================
+# 16. 사업체 수와 매출액의 관계
+# =====================================================
 
 st.divider()
-st.header("9. 지역별 데이터 분포")
+st.header("9. 사업체 수와 매출액의 관계")
 
-distribution_metric = st.selectbox(
-    "분포를 확인할 항목",
-    ["매출액", "종사자수", "사업체수"],
-    key="regional_distribution"
-)
-
-fig_distribution = px.box(
+fig_company = px.scatter(
     data,
-    x="연도",
-    y=distribution_metric,
-    points="all",
-    title=f"연도별 지역 {distribution_metric} 분포"
+    x="사업체수",
+    y="매출액",
+    color="연도",
+    hover_name="지역명",
+    title="지역별 사업체 수와 매출액의 관계"
 )
 
-st.plotly_chart(
-    fig_distribution,
-    use_container_width=True
+st.plotly_chart(fig_company, use_container_width=True)
+
+company_pearson = safe_corr(
+    data["사업체수"],
+    data["매출액"],
+    "pearson"
 )
 
+company_spearman = safe_corr(
+    data["사업체수"],
+    data["매출액"],
+    "spearman"
+)
 
-# ==========================================
-# 19. 직무별 종사자 현황
-# ==========================================
+col1, col2 = st.columns(2)
+
+col1.metric(
+    "피어슨 상관계수",
+    format_number(company_pearson)
+)
+
+col2.metric(
+    "스피어만 상관계수",
+    format_number(company_spearman)
+)
+
+st.write(
+    "사업체 수와 매출액의 관계는 "
+    + corr_description(company_pearson)
+    + "로 나타났습니다."
+)
+
+if company_pearson is not None:
+    if company_pearson > 0:
+        st.write(
+            "사업체 수가 많은 지역일수록 매출액도 높은 "
+            "경향이 관찰됩니다."
+        )
+    elif company_pearson < 0:
+        st.write(
+            "사업체 수가 많은 지역일수록 매출액이 낮은 "
+            "경향이 관찰됩니다."
+        )
+    else:
+        st.write(
+            "두 변수 사이에 뚜렷한 선형 관계가 나타나지 않았습니다."
+        )
+
+
+# =====================================================
+# 17. 지역별 평균 매출 지표
+# =====================================================
 
 st.divider()
-st.header("10. 직무별 종사자 현황")
+st.header("10. 지역별 사업체당·종사자당 매출 지표")
+
+data["사업체당 매출액"] = (
+    data["매출액"] / data["사업체수"]
+)
+
+data["종사자당 매출액"] = (
+    data["매출액"] / data["종사자수"]
+)
+
+st.write(
+    "아래 지표는 지역별 매출액을 사업체 수 또는 종사자 수로 "
+    "나눈 단순 계산값입니다. 원자료의 평균매출액 통계와 "
+    "정의 및 집계 방식이 동일하다고 확인된 것은 아닙니다."
+)
+
+ratio_choice = st.selectbox(
+    "비교할 지표",
+    ["사업체당 매출액", "종사자당 매출액"]
+)
+
+fig_ratio = px.bar(
+    data,
+    x="지역명",
+    y=ratio_choice,
+    color="연도",
+    barmode="group",
+    title=f"지역별 {ratio_choice} 비교"
+)
+
+st.plotly_chart(fig_ratio, use_container_width=True)
+
+
+# =====================================================
+# 18. 직무별 종사자 분석
+# =====================================================
+
+st.divider()
+st.header("11. 직무별 종사자 구성")
 
 job_years = sorted(job["연도"].unique())
 
 selected_job_year = st.selectbox(
-    "직무별 현황 연도 선택",
-    job_years,
-    index=len(job_years) - 1
+    "직무 분석 연도",
+    job_years
 )
 
 job_selected = job[
     (job["연도"] == selected_job_year)
     & (job["직무별"] != "합계")
-]
+].copy()
 
 fig_job = px.bar(
-    job_selected,
+    job_selected.sort_values(
+        "종사자수",
+        ascending=False
+    ),
     x="직무별",
     y="종사자수",
     color="직무별",
     text_auto=True,
-    title=f"{selected_job_year}년 직무별 종사자 수"
+    title=f"{int(selected_job_year)}년 직무별 종사자 수"
 )
 
-fig_job.update_layout(
-    showlegend=False,
-    xaxis_title="직무",
-    yaxis_title="종사자 수"
-)
+fig_job.update_layout(showlegend=False)
 
-st.plotly_chart(
-    fig_job,
-    use_container_width=True
-)
+st.plotly_chart(fig_job, use_container_width=True)
+
+job_total = job_selected["종사자수"].sum()
+
+if job_total > 0:
+    job_selected["비중(%)"] = (
+        job_selected["종사자수"] / job_total * 100
+    )
+
+    job_selected = job_selected.sort_values(
+        "종사자수",
+        ascending=False
+    )
+
+    st.dataframe(
+        job_selected[
+            ["직무별", "종사자수", "비중(%)"]
+        ],
+        use_container_width=True
+    )
+
+    top_job = job_selected.iloc[0]
+
+    st.write(
+        f"{int(selected_job_year)}년 가장 많은 종사자가 분포한 "
+        f"직무는 {top_job['직무별']}이며, "
+        f"직무별 합계에서 약 {top_job['비중(%)']:.1f}%를 "
+        "차지합니다."
+    )
 
 
-# ==========================================
-# 20. 전처리 데이터 다운로드
-# ==========================================
+# =====================================================
+# 19. 탐구 주제에 따른 종합 해석
+# =====================================================
 
 st.divider()
-st.header("11. 전처리 데이터 다운로드")
+st.header("12. 탐구 주제에 따른 종합 해석")
+
+st.subheader(
+    "탐구 주제: 국내 애니메이션산업의 지역별 매출액과 "
+    "종사자 수는 어떤 관계가 있으며, 사업체 수는 "
+    "이러한 관계와 어떻게 연결되는가?"
+)
+
+interpretations = []
+
+# 연도별 사업체 수 변화
+if len(yearly) >= 2:
+    first = yearly.iloc[0]
+    last = yearly.iloc[-1]
+
+    if first["사업체수"] != 0:
+        company_change = (
+            (last["사업체수"] - first["사업체수"])
+            / first["사업체수"] * 100
+        )
+
+        interpretations.append(
+            f"① 사업체 수 변화: {int(first['연도'])}년부터 "
+            f"{int(last['연도'])}년까지 분석 대상 지역의 "
+            f"사업체 수 합계는 "
+            f"{format_change(company_change)} 했습니다."
+        )
+
+# 매출액과 종사자 수
+if pearson is not None:
+    interpretations.append(
+        f"② 매출액과 종사자 수: 피어슨 상관계수는 "
+        f"{pearson:.3f}이며, "
+        f"{corr_description(pearson)}가 관찰됩니다."
+    )
+else:
+    interpretations.append(
+        "② 매출액과 종사자 수: 자료가 부족하거나 변동이 없어 "
+        "상관관계를 계산할 수 없습니다."
+    )
+
+# 사업체 수와 매출액
+if company_pearson is not None:
+    interpretations.append(
+        f"③ 사업체 수와 매출액: 피어슨 상관계수는 "
+        f"{company_pearson:.3f}이며, "
+        f"{corr_description(company_pearson)}가 관찰됩니다."
+    )
+else:
+    interpretations.append(
+        "③ 사업체 수와 매출액: 상관관계를 계산할 수 없습니다."
+    )
+
+# 매출액 최고 지역
+latest_year = data["연도"].max()
+
+latest_data = data[
+    data["연도"] == latest_year
+]
+
+if not latest_data.empty:
+    highest_revenue = latest_data.loc[
+        latest_data["매출액"].idxmax()
+    ]
+
+    highest_employee = latest_data.loc[
+        latest_data["종사자수"].idxmax()
+    ]
+
+    highest_company = latest_data.loc[
+        latest_data["사업체수"].idxmax()
+    ]
+
+    interpretations.append(
+        f"④ 지역별 매출액: {int(latest_year)}년 "
+        f"분석 대상 중 매출액이 가장 높은 지역은 "
+        f"{highest_revenue['지역명']}입니다."
+    )
+
+    interpretations.append(
+        f"⑤ 지역별 종사자 수: {int(latest_year)}년 "
+        f"분석 대상 중 종사자 수가 가장 높은 지역은 "
+        f"{highest_employee['지역명']}입니다."
+    )
+
+    interpretations.append(
+        f"⑥ 지역별 사업체 수: {int(latest_year)}년 "
+        f"분석 대상 중 사업체 수가 가장 높은 지역은 "
+        f"{highest_company['지역명']}입니다."
+    )
+
+for item in interpretations:
+    st.write(item)
+
+st.subheader("종합 결론")
+
+if pearson is not None and company_pearson is not None:
+    if pearson > 0 and company_pearson > 0:
+        conclusion = (
+            "분석 대상 지역에서는 종사자 수와 매출액, "
+            "사업체 수와 매출액 사이에 모두 양의 상관관계가 "
+            "관찰됩니다. 이는 고용 규모와 사업체 규모가 "
+            "지역별 매출액과 함께 움직이는 경향이 있음을 "
+            "보여줍니다."
+        )
+    elif pearson > 0:
+        conclusion = (
+            "종사자 수와 매출액 사이에는 양의 상관관계가 "
+            "관찰되지만, 사업체 수와 매출액 사이에서는 "
+            "같은 방향의 관계가 확인되지 않았습니다. "
+            "따라서 사업체 수뿐 아니라 고용 규모도 함께 "
+            "살펴볼 필요가 있습니다."
+        )
+    elif company_pearson > 0:
+        conclusion = (
+            "사업체 수와 매출액 사이에는 양의 상관관계가 "
+            "관찰되지만, 종사자 수와 매출액 사이에서는 "
+            "같은 방향의 관계가 확인되지 않았습니다."
+        )
+    else:
+        conclusion = (
+            "두 변수 관계에서 뚜렷한 양의 상관관계가 "
+            "모두 확인되지는 않았습니다. 지역별 산업 규모를 "
+            "해석할 때 다른 요인도 함께 살펴볼 필요가 있습니다."
+        )
+
+    st.write(conclusion)
+
+else:
+    st.write(
+        "현재 데이터만으로 매출액과 종사자 수, 사업체 수의 "
+        "관계를 모두 확인하기 어렵습니다. 자료의 누락 여부와 "
+        "지역·연도별 대응 관계를 추가로 확인해야 합니다."
+    )
+
+st.warning(
+    "위 결론은 관찰된 지역별 자료의 상관관계에 관한 것입니다. "
+    "사업체 수나 종사자 수가 매출액을 직접 증가시켰다고 "
+    "단정할 수 없습니다."
+)
+
+
+# =====================================================
+# 20. 보고서용 해석문 자동 생성
+# =====================================================
+
+st.divider()
+st.header("13. 보고서에 활용할 수 있는 분석 결과")
+
+report_lines = []
+
+report_lines.append(
+    "이번 탐구에서는 2020년부터 2022년까지의 "
+    "국내 애니메이션산업 자료를 활용하여 "
+    "지역별 매출액, 종사자 수, 사업체 수의 관계를 분석하였다."
+)
+
+if len(yearly) >= 2:
+    first = yearly.iloc[0]
+    last = yearly.iloc[-1]
+
+    report_lines.append(
+        f"사업체 수는 {int(first['연도'])}년 "
+        f"{first['사업체수']:,.0f}개에서 "
+        f"{int(last['연도'])}년 "
+        f"{last['사업체수']:,.0f}개로 변화하였다."
+    )
+
+if pearson is not None:
+    report_lines.append(
+        f"매출액과 종사자 수의 피어슨 상관계수는 "
+        f"{pearson:.3f}으로, "
+        f"{corr_description(pearson)}가 나타났다."
+    )
+
+if company_pearson is not None:
+    report_lines.append(
+        f"사업체 수와 매출액의 피어슨 상관계수는 "
+        f"{company_pearson:.3f}으로, "
+        f"{corr_description(company_pearson)}가 나타났다."
+    )
+
+report_lines.append(
+    "지역별 막대그래프와 상자그림을 통해 지역 간 산업 규모와 "
+    "분포의 차이를 비교하고, 산점도와 상관계수를 이용하여 "
+    "매출액과 고용 및 사업체 규모 사이의 관계를 확인하였다."
+)
+
+report_lines.append(
+    "이러한 결과는 지역별 애니메이션산업의 규모를 파악하는 데 "
+    "도움이 되지만, 상관관계만으로 변수 사이의 인과관계를 "
+    "확정할 수는 없다."
+)
+
+report_text = "\n\n".join(report_lines)
+
+st.text_area(
+    "자동 생성된 보고서용 해석문",
+    value=report_text,
+    height=250
+)
 
 st.download_button(
-    label="지역별 통합 데이터 다운로드",
+    "보고서용 해석문 다운로드",
+    data=report_text,
+    file_name="애니메이션산업_분석결과.txt",
+    mime="text/plain"
+)
+
+
+# =====================================================
+# 21. 데이터 다운로드
+# =====================================================
+
+st.divider()
+st.header("14. 전처리 데이터 다운로드")
+
+st.download_button(
+    "지역별 통합 데이터 CSV 다운로드",
     data=data.to_csv(
         index=False,
         encoding="utf-8-sig"
@@ -994,7 +1412,7 @@ st.download_button(
 )
 
 st.download_button(
-    label="직무별 데이터 다운로드",
+    "직무별 전처리 데이터 CSV 다운로드",
     data=job.to_csv(
         index=False,
         encoding="utf-8-sig"
@@ -1003,34 +1421,6 @@ st.download_button(
     mime="text/csv"
 )
 
-
-# ==========================================
-# 21. 전처리 근거
-# ==========================================
-
-st.divider()
-st.header("12. 전처리 근거 및 분석 결과")
-
-st.markdown("""
-### 데이터 전처리 기준
-
-1. **반복된 제목 행 제거:** 데이터 중간에 반복된 열 제목 행을 제거했습니다.
-2. **합계·소계 행 제거:** 개별 지역 분석에 적합하지 않은 집계 행을 지역별 분석에서 제외했습니다.
-3. **지역명 표준화:** 경기와 경기도처럼 같은 지역을 다르게 표현한 경우 명칭을 통일했습니다.
-4. **숫자형 변환:** 연도와 매출액, 종사자 수, 사업체 수를 숫자형으로 변환했습니다.
-5. **결측값 확인:** 지역명이나 연도, 분석에 필요한 수치가 없는 행을 분석에서 제외했습니다.
-6. **중복 자료 확인:** 동일 지역·연도에 서로 다른 수치가 존재하는 경우 임의로 삭제하지 않고 오류를 표시하도록 했습니다.
-7. **직무별 합계 보존:** 직무별 자료의 합계는 원본 비교를 위해 보존하고 직무 구성 그래프에서는 제외했습니다.
-
-### 전처리의 타당성 확인
-
-원본과 전처리 데이터의 행 개수, 평균, 중앙값, 표준편차 및 상자그림을 비교하여 데이터 분포의 변화를 확인했습니다.
-
-단, 통계량의 변화만으로 전처리가 적절하다고 판단할 수는 없습니다. 각 행이 어떤 의미를 가지는지와 원본 통계의 집계 기준도 함께 확인해야 합니다.
-
-### 분석 시 유의사항
-
-매출액과 종사자 수의 상관계수는 두 지표의 관계를 확인하는 자료입니다. 상관관계만으로 한 지표가 다른 지표의 원인이라고 결론 내릴 수는 없습니다.
-""")
-
-st.success("원본 데이터 비교 및 전처리 분석이 완료되었습니다.")
+st.success(
+    "데이터 전처리, 시각화, 통계분석 및 해석이 완료되었습니다."
+)
