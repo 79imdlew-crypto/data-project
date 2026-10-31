@@ -1521,12 +1521,219 @@ else:
     )
 
 
+
 # =====================================================
-# 20. 탐구 주제에 따른 종합 해석
+# 20. 회귀 모델 학습 및 성능 비교
 # =====================================================
 
 st.divider()
-st.header("13. 탐구 주제에 따른 종합 해석")
+st.header("13. 회귀 모델 학습 및 성능 비교")
+
+st.markdown(
+    """
+    **분석 목표:** 지역·연도별 종사자 수, 사업체 수, 연도를 이용해
+    해당 지역·연도의 매출액을 예측합니다. 매출액을 예측 대상(종속변수),
+    종사자 수·사업체 수·연도를 설명 변수(독립변수)로 설정했습니다.
+    여기서 선형회귀는 종사자 수만 사용하는 단순 선형회귀와 세 변수를
+    사용하는 다중 선형회귀로 나누어 비교합니다. 따라서 모델 계열은
+    선형회귀, K-최근접 이웃 회귀, 랜덤 포레스트 회귀, XGBoost 회귀의
+    네 가지입니다.
+    """
+)
+
+with st.expander("각 회귀 모델은 어떻게 작동할까?", expanded=True):
+    st.markdown(
+        """
+        - **선형회귀(단순):** 종사자 수와 매출액 사이를 하나의 직선으로 나타내고,
+          실제값과 직선의 예측값 차이(잔차)의 제곱합이 작아지도록 직선을 찾습니다.
+        - **다중 선형회귀:** 종사자 수뿐 아니라 사업체 수와 연도까지 함께 고려해
+          여러 변수의 가중합으로 매출액을 예측합니다.
+        - **K-최근접 이웃(KNN) 회귀:** 예측하려는 데이터와 특성이 가까운 학습 데이터
+          k개를 찾고, 이웃들의 매출액 평균(거리 가중치 적용)을 예측값으로 사용합니다.
+        - **랜덤 포레스트 회귀:** 학습 데이터를 다르게 뽑아 여러 결정 트리를 만들고,
+          각 트리의 예측값을 평균하여 예측의 변동을 줄입니다.
+        - **XGBoost 회귀:** 작은 결정 트리를 순차적으로 추가하면서 앞선 모델의
+          예측 오차를 보완하고, 여러 트리의 결과를 합쳐 예측합니다.
+        """
+    )
+
+st.caption(
+    "모델은 지역별 통합 데이터(data)를 사용합니다. 전국 단위 직무별 자료는 "
+    "지역별 매출액과 지역 단위가 일치하지 않으므로 회귀 입력 변수에는 포함하지 않았습니다."
+)
+
+try:
+    from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LinearRegression
+    from sklearn.neighbors import KNeighborsRegressor
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+    import numpy as np
+
+    model_data = data[["지역명", "연도", "종사자수", "사업체수", "매출액"]].copy()
+    for col in ["연도", "종사자수", "사업체수", "매출액"]:
+        model_data[col] = pd.to_numeric(model_data[col], errors="coerce")
+    model_data = model_data.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if len(model_data) < 12:
+        st.warning(
+            f"모델 학습에 사용할 수 있는 행이 {len(model_data)}개입니다. "
+            "표본이 너무 적어 모델 성능을 안정적으로 비교하기 어렵습니다."
+        )
+    else:
+        X_simple = model_data[["종사자수"]]
+        X_multi = model_data[["종사자수", "사업체수", "연도"]]
+        y = model_data["매출액"]
+
+        # 동일한 학습·평가 자료를 모든 모델에 사용해 공정하게 비교
+        indices = np.arange(len(model_data))
+        train_idx, test_idx = train_test_split(
+            indices, test_size=0.25, random_state=42
+        )
+        Xs_train, Xs_test = X_simple.iloc[train_idx], X_simple.iloc[test_idx]
+        Xm_train, Xm_test = X_multi.iloc[train_idx], X_multi.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+
+        models = {
+            "단순 선형회귀": LinearRegression(),
+            "다중 선형회귀": LinearRegression(),
+            "K-최근접 이웃 회귀": make_pipeline(
+                StandardScaler(),
+                KNeighborsRegressor(n_neighbors=min(5, len(train_idx)))
+            ),
+            "랜덤 포레스트 회귀": RandomForestRegressor(
+                n_estimators=300, random_state=42, min_samples_leaf=1
+            )
+        }
+        model_inputs = {
+            "단순 선형회귀": (Xs_train, Xs_test),
+            "다중 선형회귀": (Xm_train, Xm_test),
+            "K-최근접 이웃 회귀": (Xm_train, Xm_test),
+            "랜덤 포레스트 회귀": (Xm_train, Xm_test)
+        }
+
+        xgb_available = False
+        try:
+            from xgboost import XGBRegressor
+            models["XGBoost 회귀"] = XGBRegressor(
+                n_estimators=300,
+                max_depth=3,
+                learning_rate=0.03,
+                subsample=0.9,
+                colsample_bytree=0.9,
+                objective="reg:squarederror",
+                random_state=42,
+                n_jobs=1
+            )
+            model_inputs["XGBoost 회귀"] = (Xm_train, Xm_test)
+            xgb_available = True
+        except ImportError:
+            st.warning(
+                "XGBoost가 설치되지 않아 해당 모델은 이번 실행에서 제외했습니다. "
+                "requirements.txt에 xgboost를 추가한 뒤 다시 배포하면 됩니다."
+            )
+
+        results = []
+        predictions = {}
+        fitted_models = {}
+        for model_name, model in models.items():
+            x_train_model, x_test_model = model_inputs[model_name]
+            model.fit(x_train_model, y_train)
+            pred = model.predict(x_test_model)
+            fitted_models[model_name] = model
+            predictions[model_name] = pred
+            results.append({
+                "모델": model_name,
+                "MAE": mean_absolute_error(y_test, pred),
+                "RMSE": np.sqrt(mean_squared_error(y_test, pred)),
+                "R²": r2_score(y_test, pred)
+            })
+
+        result_df = pd.DataFrame(results).sort_values("RMSE").reset_index(drop=True)
+        st.subheader("학습·평가 데이터 구성")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("전체 데이터", f"{len(model_data)}개")
+        c2.metric("학습 데이터", f"{len(train_idx)}개")
+        c3.metric("평가 데이터", f"{len(test_idx)}개")
+        st.write("평가 지표는 MAE·RMSE는 낮을수록, R²는 높을수록 일반적으로 좋습니다.")
+        st.dataframe(result_df, use_container_width=True)
+
+        metric_choice = st.selectbox(
+            "모델 성능 그래프 지표", ["RMSE", "MAE", "R²"], key="reg_metric_choice"
+        )
+        fig_model = px.bar(
+            result_df.sort_values(metric_choice, ascending=(metric_choice != "R²")),
+            x="모델", y=metric_choice, color="모델", text_auto=".3f",
+            title=f"회귀 모델별 {metric_choice} 비교"
+        )
+        fig_model.update_layout(showlegend=False)
+        st.plotly_chart(fig_model, use_container_width=True)
+
+        selected_model = st.selectbox(
+            "실제 매출액과 예측 매출액 비교",
+            list(predictions.keys()), key="reg_prediction_model"
+        )
+        prediction_df = pd.DataFrame({
+            "실제 매출액": y_test.to_numpy(),
+            "예측 매출액": predictions[selected_model]
+        })
+        prediction_df["지역명"] = model_data.iloc[test_idx]["지역명"].to_numpy()
+        prediction_df["연도"] = model_data.iloc[test_idx]["연도"].to_numpy()
+        st.dataframe(prediction_df, use_container_width=True)
+        fig_pred = px.scatter(
+            prediction_df, x="실제 매출액", y="예측 매출액",
+            hover_data=["지역명", "연도"],
+            title=f"{selected_model}: 실제값과 예측값 비교"
+        )
+        st.plotly_chart(fig_pred, use_container_width=True)
+
+        if selected_model in ["랜덤 포레스트 회귀", "XGBoost 회귀"]:
+            selected_fitted = fitted_models[selected_model]
+            importance_model = selected_fitted
+            if selected_model == "XGBoost 회귀":
+                importance = importance_model.feature_importances_
+            else:
+                importance = importance_model.feature_importances_
+            importance_df = pd.DataFrame({
+                "변수": Xm_train.columns,
+                "중요도": importance
+            }).sort_values("중요도", ascending=False)
+            st.subheader(f"{selected_model}의 변수 중요도")
+            st.plotly_chart(
+                px.bar(importance_df, x="변수", y="중요도", text_auto=".3f"),
+                use_container_width=True
+            )
+
+        best_row = result_df.iloc[0]
+        st.success(
+            f"이번 한 번의 학습·평가 분할에서 RMSE가 가장 낮은 모델은 "
+            f"{best_row['모델']}입니다. RMSE는 {best_row['RMSE']:,.3f}입니다."
+        )
+        st.info(
+            "주의: 현재 자료는 2020~2022년의 지역별 관측치로 표본 수가 많지 않습니다. "
+            "무작위 분할에서는 같은 지역의 다른 연도가 학습·평가 자료에 나뉘어 들어갈 수 있어 "
+            "새로운 연도에 대한 예측 성능을 보장하지 않습니다. 따라서 결과는 탐색적 비교이며, "
+            "인과관계나 실제 미래 매출액 예측의 정확성을 입증하는 결과가 아닙니다. "
+            "또한 단순 선형회귀와 다중 선형회귀는 서로 다른 입력 변수 구성을 비교한 것입니다."
+        )
+
+except ImportError as e:
+    st.error(
+        "회귀 모델 실행에 필요한 scikit-learn 또는 numpy가 없습니다. "
+        "requirements.txt에 scikit-learn과 numpy를 추가해 주세요."
+    )
+except Exception as e:
+    st.error(f"회귀 모델 학습 중 오류가 발생했습니다: {e}")
+
+
+# =====================================================
+# 21. 탐구 주제에 따른 종합 해석
+# =====================================================
+
+st.divider()
+st.header("14. 탐구 주제에 따른 종합 해석")
 
 st.subheader(
     "탐구 주제: 국내 애니메이션산업의 지역별 매출액과 "
@@ -1669,11 +1876,11 @@ st.warning(
 
 
 # =====================================================
-# 21. 보고서용 해석문 자동 생성
+# 22. 보고서용 해석문 자동 생성
 # =====================================================
 
 st.divider()
-st.header("14. 보고서에 활용할 수 있는 분석 결과")
+st.header("15. 보고서에 활용할 수 있는 분석 결과")
 
 report_lines = []
 
@@ -1745,11 +1952,11 @@ st.download_button(
 
 
 # =====================================================
-# 22. 데이터 다운로드
+# 23. 데이터 다운로드
 # =====================================================
 
 st.divider()
-st.header("15. 전처리 데이터 다운로드")
+st.header("16. 전처리 데이터 다운로드")
 
 st.download_button(
     "지역별 통합 데이터 CSV 다운로드",
