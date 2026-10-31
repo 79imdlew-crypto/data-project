@@ -1180,11 +1180,353 @@ if job_total > 0:
 
 
 # =====================================================
-# 19. 탐구 주제에 따른 종합 해석
+# 19. 보조 분석: 매출액 변화와 직무별 종사자 구성 비교
 # =====================================================
 
 st.divider()
-st.header("12. 탐구 주제에 따른 종합 해석")
+st.header("12. 보조 분석: 매출액 변화와 직무별 종사자 구성")
+
+st.markdown(
+    """
+    이 분석은 전국 매출액의 연도별 변화와 전국 직무별 종사자 수의
+    변화를 같은 기간에 비교합니다. 지역별 매출액 분석을 대체하는 것이
+    아니라, 산업 전체의 인력 구성이 어떻게 변화했는지 추가로 살펴보는
+    보조 분석입니다.
+
+    두 자료는 전국 단위의 연도별 자료이므로 지역별 매출액과 직무별
+    인원을 직접 연결할 수 없습니다. 또한 관측 연도가 제한적이므로
+    변화 방향을 비교하는 데 목적이 있으며, 인과관계를 증명하지 않습니다.
+    """
+)
+
+# 원자료의 전국 매출액 합계 행 추출
+national_revenue_aux = revenue_raw.copy()
+
+if {"지역", "연도", "값"}.issubset(national_revenue_aux.columns):
+    national_revenue_aux["지역"] = (
+        national_revenue_aux["지역"].astype(str).str.strip()
+    )
+    national_revenue_aux["연도"] = pd.to_numeric(
+        national_revenue_aux["연도"], errors="coerce"
+    )
+    national_revenue_aux["매출액"] = pd.to_numeric(
+        national_revenue_aux["값"].astype(str).str.replace(",", "", regex=False),
+        errors="coerce"
+    )
+
+    national_revenue_aux = national_revenue_aux[
+        (national_revenue_aux["지역"] == "합계")
+        & national_revenue_aux["연도"].between(2020, 2022)
+    ][["연도", "매출액"]].dropna()
+
+    national_revenue_aux = national_revenue_aux.drop_duplicates(
+        subset=["연도"], keep="last"
+    )
+
+else:
+    national_revenue_aux = pd.DataFrame(
+        columns=["연도", "매출액"]
+    )
+
+# 원자료에서 전국 합계 행을 찾지 못한 경우에만
+# 전처리된 개별 지역 매출액의 합계를 대체값으로 사용
+revenue_source_note = "원자료의 전국 합계 행"
+
+if national_revenue_aux.empty:
+    national_revenue_aux = (
+        revenue.groupby("연도", as_index=False)["매출액"]
+        .sum()
+    )
+    revenue_source_note = "전처리된 개별 지역 매출액의 합계(전국 공식 합계와 다를 수 있음)"
+
+job_detail_aux = job[
+    job["직무별"].astype(str).str.strip() != "합계"
+].copy()
+
+job_detail_aux = job_detail_aux[
+    job_detail_aux["연도"].between(2020, 2022)
+]
+
+job_pivot_aux = job_detail_aux.pivot_table(
+    index="연도",
+    columns="직무별",
+    values="종사자수",
+    aggfunc="sum"
+).reset_index()
+
+job_revenue_comparison = national_revenue_aux.merge(
+    job_pivot_aux,
+    on="연도",
+    how="inner"
+).sort_values("연도")
+
+st.caption(
+    f"매출액 자료 기준: {revenue_source_note}. "
+    "매출액의 단위는 원자료의 단위를 따릅니다."
+)
+
+if job_revenue_comparison.empty:
+    st.warning(
+        "매출액과 직무별 종사자 자료에서 공통 연도를 찾지 못했습니다. "
+        "각 CSV의 연도와 전국 합계 행을 확인해 주세요."
+    )
+else:
+    st.subheader("12-1. 전국 매출액과 직무별 종사자 수 비교")
+
+    st.dataframe(
+        job_revenue_comparison,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # 연도별 증감률 계산
+    comparison_change_aux = job_revenue_comparison.copy()
+    comparison_columns_aux = [
+        col for col in comparison_change_aux.columns
+        if col != "연도"
+    ]
+
+    for col in comparison_columns_aux:
+        comparison_change_aux[f"{col}_변화율(%)"] = (
+            comparison_change_aux[col].pct_change() * 100
+        )
+
+    change_columns_aux = ["연도"] + [
+        f"{col}_변화율(%)"
+        for col in comparison_columns_aux
+    ]
+
+    st.subheader("12-2. 매출액과 직무별 종사자 수의 연도별 변화율")
+
+    st.dataframe(
+        comparison_change_aux[change_columns_aux].round(2),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.caption(
+        "변화율은 직전 공통 연도 대비 증감률입니다. "
+        "첫 번째 연도는 비교 대상이 없어 값이 표시되지 않습니다."
+    )
+
+    # 서로 다른 단위의 지표를 비교하기 위해 첫 공통 연도를 100으로 환산
+    st.subheader("12-3. 기준 연도 대비 매출액·직무별 인원 변화")
+
+    indexed_aux = job_revenue_comparison.copy()
+    index_columns_aux = [
+        col for col in indexed_aux.columns
+        if col != "연도"
+    ]
+
+    base_values_aux = indexed_aux.iloc[0]
+
+    for col in index_columns_aux:
+        if pd.notna(base_values_aux[col]) and base_values_aux[col] != 0:
+            indexed_aux[f"{col}_지수"] = (
+                indexed_aux[col] / base_values_aux[col] * 100
+            )
+
+    index_long_columns_aux = [
+        f"{col}_지수"
+        for col in index_columns_aux
+        if f"{col}_지수" in indexed_aux.columns
+    ]
+
+    index_long_aux = indexed_aux[
+        ["연도"] + index_long_columns_aux
+    ].melt(
+        id_vars="연도",
+        var_name="항목",
+        value_name="지수"
+    )
+
+    index_long_aux["항목"] = (
+        index_long_aux["항목"]
+        .str.replace("_지수", "", regex=False)
+    )
+
+    fig_index_aux = px.line(
+        index_long_aux,
+        x="연도",
+        y="지수",
+        color="항목",
+        markers=True,
+        title=(
+            f"{int(indexed_aux.iloc[0]['연도'])}년을 100으로 설정한 "
+            "매출액·직무별 종사자 수 변화"
+        )
+    )
+
+    fig_index_aux.add_hline(
+        y=100,
+        line_dash="dash",
+        annotation_text="기준 지수 100"
+    )
+
+    fig_index_aux.update_layout(
+        xaxis_title="연도",
+        yaxis_title="기준 연도 대비 지수"
+    )
+
+    st.plotly_chart(fig_index_aux, use_container_width=True)
+
+    st.caption(
+        "지수는 서로 단위가 다른 매출액과 종사자 수의 변화 방향을 "
+        "비교하기 위한 값입니다. 기준 연도는 공통으로 확보된 첫 연도이며, "
+        "지수 100보다 높으면 기준 연도보다 증가한 것입니다."
+    )
+
+    # 직무별 구성 비중의 연도별 변화
+    st.subheader("12-4. 직무별 종사자 구성 비중 변화")
+
+    job_share_aux = job_detail_aux.copy()
+    job_share_aux["직무별 합계"] = (
+        job_share_aux.groupby("연도")["종사자수"].transform("sum")
+    )
+    job_share_aux["비중(%)"] = (
+        job_share_aux["종사자수"]
+        / job_share_aux["직무별 합계"] * 100
+    )
+
+    fig_share_aux = px.bar(
+        job_share_aux,
+        x="연도",
+        y="비중(%)",
+        color="직무별",
+        barmode="stack",
+        title="연도별 직무 구성 비중"
+    )
+
+    fig_share_aux.update_layout(
+        xaxis_title="연도",
+        yaxis_title="직무별 비중 (%)"
+    )
+
+    st.plotly_chart(fig_share_aux, use_container_width=True)
+
+    st.caption(
+        "각 연도의 직무별 항목 합계를 100%로 환산했습니다. "
+        "직무별 합계가 공식 전체 종사자 수와 일치하는지는 별도로 확인해야 합니다."
+    )
+
+    # 제작 직무에 초점을 맞춰 매출액과 나란히 비교
+    st.subheader("12-5. 매출액과 제작 직무 종사자 수 비교")
+
+    if "제작" in job_revenue_comparison.columns:
+        production_compare_aux = job_revenue_comparison[
+            ["연도", "매출액", "제작"]
+        ].copy()
+
+        production_long_aux = production_compare_aux.melt(
+            id_vars="연도",
+            var_name="항목",
+            value_name="값"
+        )
+
+        fig_production_aux = px.line(
+            production_long_aux,
+            x="연도",
+            y="값",
+            color="항목",
+            markers=True,
+            title="전국 매출액과 제작 직무 종사자 수의 변화"
+        )
+
+        fig_production_aux.update_layout(
+            xaxis_title="연도",
+            yaxis_title="각 항목의 원자료 값"
+        )
+
+        st.plotly_chart(
+            fig_production_aux,
+            use_container_width=True
+        )
+
+        st.caption(
+            "두 항목의 단위와 규모가 다르므로 이 그래프는 변화 추세를 "
+            "함께 확인하는 용도입니다. 수치의 높이를 직접 비교하면 안 됩니다."
+        )
+    else:
+        st.info(
+            "직무별 데이터에서 '제작' 항목을 찾지 못해 "
+            "제작 직무 비교 그래프를 표시하지 못했습니다."
+        )
+
+    # 보조 분석 자동 해석
+    st.subheader("12-6. 보조 분석 해석")
+
+    first_aux = job_revenue_comparison.iloc[0]
+    last_aux = job_revenue_comparison.iloc[-1]
+
+    revenue_change_aux = None
+    if first_aux["매출액"] != 0:
+        revenue_change_aux = (
+            (last_aux["매출액"] - first_aux["매출액"])
+            / abs(first_aux["매출액"]) * 100
+        )
+
+    if revenue_change_aux is not None:
+        st.write(
+            f"공통 분석 기간인 {int(first_aux['연도'])}년부터 "
+            f"{int(last_aux['연도'])}년까지 매출액은 "
+            f"{format_change(revenue_change_aux)} 했습니다."
+        )
+
+    if "제작" in job_revenue_comparison.columns:
+        first_production_aux = first_aux["제작"]
+        last_production_aux = last_aux["제작"]
+
+        if pd.notna(first_production_aux) and first_production_aux != 0:
+            production_change_aux = (
+                (last_production_aux - first_production_aux)
+                / abs(first_production_aux) * 100
+            )
+
+            st.write(
+                f"같은 기간 제작 직무 종사자 수는 "
+                f"{format_change(production_change_aux)} 했습니다."
+            )
+
+            if (
+                revenue_change_aux is not None
+                and revenue_change_aux > 0
+                and production_change_aux > 0
+            ):
+                st.write(
+                    "분석 기간에 매출액과 제작 직무 종사자 수가 "
+                    "모두 증가하는 방향을 보였습니다."
+                )
+            elif (
+                revenue_change_aux is not None
+                and revenue_change_aux < 0
+                and production_change_aux < 0
+            ):
+                st.write(
+                    "분석 기간에 매출액과 제작 직무 종사자 수가 "
+                    "모두 감소하는 방향을 보였습니다."
+                )
+            else:
+                st.write(
+                    "분석 기간에 매출액과 제작 직무 종사자 수의 "
+                    "변화 방향이 서로 다르게 나타났거나, 한쪽의 변화가 "
+                    "뚜렷하지 않았습니다."
+                )
+
+    st.info(
+        "이 결과는 매출액과 직무별 인력 변화가 같은 시기에 어떻게 "
+        "나타났는지 보여주는 탐색적 비교입니다. 연도별 관측값이 적고 "
+        "직무별 자료가 전국 단위이므로, 직무별 인력 변화가 매출액 변화의 "
+        "원인이라고 결론 내릴 수는 없습니다. 또한 제작 직무 전체를 "
+        "CG·VFX 종사자 수로 해석해서는 안 됩니다."
+    )
+
+
+# =====================================================
+# 20. 탐구 주제에 따른 종합 해석
+# =====================================================
+
+st.divider()
+st.header("13. 탐구 주제에 따른 종합 해석")
 
 st.subheader(
     "탐구 주제: 국내 애니메이션산업의 지역별 매출액과 "
@@ -1327,11 +1669,11 @@ st.warning(
 
 
 # =====================================================
-# 20. 보고서용 해석문 자동 생성
+# 21. 보고서용 해석문 자동 생성
 # =====================================================
 
 st.divider()
-st.header("13. 보고서에 활용할 수 있는 분석 결과")
+st.header("14. 보고서에 활용할 수 있는 분석 결과")
 
 report_lines = []
 
@@ -1340,6 +1682,14 @@ report_lines.append(
     "국내 애니메이션산업 자료를 활용하여 "
     "지역별 매출액, 종사자 수, 사업체 수의 관계를 분석하였다."
 )
+
+if "job_revenue_comparison" in locals() and not job_revenue_comparison.empty:
+    report_lines.append(
+        "보조 분석에서는 전국 매출액과 직무별 종사자 수의 연도별 변화를 "
+        "비교하여 산업 내부의 인력 구성 변화도 살펴보았다. "
+        "이는 두 지표의 변화 양상을 비교한 것이며, 직무별 인력 변화가 "
+        "매출액 변화의 원인이라는 의미는 아니다."
+    )
 
 if len(yearly) >= 2:
     first = yearly.iloc[0]
@@ -1395,11 +1745,11 @@ st.download_button(
 
 
 # =====================================================
-# 21. 데이터 다운로드
+# 22. 데이터 다운로드
 # =====================================================
 
 st.divider()
-st.header("14. 전처리 데이터 다운로드")
+st.header("15. 전처리 데이터 다운로드")
 
 st.download_button(
     "지역별 통합 데이터 CSV 다운로드",
