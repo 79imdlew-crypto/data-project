@@ -519,6 +519,18 @@ with tab_question:
         "지역별 종사자 수와 사업체 수, 연도를 이용해 매출액을 예측하고, "
         "회귀 모델이 단순 평균 예측 기준선보다 나은 성능을 보이는지 확인합니다."
     )
+    st.markdown(
+        "**분석 방법을 회귀로 선택한 이유:** 이번 탐구의 예측 대상인 매출액은 "
+        "높음·낮음과 같은 범주가 아니라 연속적인 수치입니다. 따라서 수치형 결과를 "
+        "예측하는 회귀 분석이 적합합니다. 분류는 범주를 구분하고, 군집은 유사한 "
+        "자료끼리 묶는 방법이므로 이번 매출액 예측 질문과는 목적이 다릅니다."
+    )
+    st.markdown(
+        "**분석 변수:** 종속변수는 예측 대상인 매출액이며, 독립변수는 종사자 수·"
+        "사업체 수·연도입니다. 단순 선형회귀는 종사자 수만 사용하고, 나머지 다중 "
+        "변수 기반 모델은 세 변수를 함께 사용합니다. 전국 단위 직무별 자료는 "
+        "지역 단위가 일치하지 않아 회귀 입력 변수에서 제외했습니다."
+    )
     st.caption(
         "분석 자료는 2020~2022년 지역별 통계입니다. 관찰 자료를 이용한 분석이므로 "
         "변수 사이의 인과관계를 증명하는 것은 아닙니다."
@@ -1595,11 +1607,15 @@ try:
             "K-최근접 이웃 회귀": (make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=min(5, len(train_idx)))), Xm_train, Xm_test),
             "랜덤 포레스트 회귀": (RandomForestRegressor(n_estimators=300, random_state=42), Xm_train, Xm_test)
         }
+        excluded_models = []
         try:
             from xgboost import XGBRegressor
             models["XGBoost 회귀"] = (XGBRegressor(n_estimators=300, max_depth=3, learning_rate=0.03, subsample=0.9, colsample_bytree=0.9, objective="reg:squarederror", random_state=42, n_jobs=1), Xm_train, Xm_test)
         except ImportError:
-            pass
+            excluded_models.append({
+                "모델": "XGBoost 회귀",
+                "제외 이유": "xgboost 라이브러리를 불러오지 못해 이번 실행의 수치 비교에서 제외함."
+            })
 
         rows, preds, fitted = [], {}, {}
         for name, (estimator, xtr, xte) in models.items():
@@ -1614,7 +1630,8 @@ try:
 
         with tab_baseline:
             st.header("3. 기준선")
-            st.write("기준선은 복잡한 학습 없이 학습 데이터의 매출액 평균을 모든 평가 데이터의 예측값으로 사용하는 단순한 비교 대상입니다.")
+            st.write("기준선은 수업에서 배운 평균 모델을 적용한 것으로, 학습 데이터의 매출액 평균을 모든 평가 데이터의 예측값으로 사용하는 단순한 비교 대상입니다.")
+            st.caption("즉, 지역별 종사자 수나 사업체 수의 차이를 반영하지 않고 모든 평가 사례에 동일한 평균 매출액을 예측합니다. 후보 회귀 모델이 이 단순한 기준보다 실제로 나은지 판단하기 위해 사용합니다.")
             c1,c2,c3=st.columns(3)
             c1.metric("전체 데이터", f"{len(model_data)}개")
             c2.metric("학습 데이터", f"{len(train_idx)}개")
@@ -1626,7 +1643,22 @@ try:
 
         with tab_evaluation:
             st.header("4. 모델 평가")
-            st.write("기준선과 모든 회귀 모델은 동일한 학습·평가 데이터 분할을 사용합니다.")
+            st.write("모든 모델은 동일한 학습·평가 데이터 분할(학습 75%, 평가 25%, random_state=42)을 사용합니다. 다중 선형회귀·KNN·랜덤 포레스트·XGBoost는 종사자 수·사업체 수·연도라는 동일한 변수를 사용하므로 이 네 모델을 공정한 주 비교 대상으로 삼습니다. 단순 선형회귀는 종사자 수만 사용하는 추가 참고 모델입니다.")
+            with st.expander("비교한 후보 모델과 작동 방식", expanded=True):
+                st.markdown(
+                    """
+                    | 후보 모델 | 사용 변수 | 특징 |
+                    |---|---|---|
+                    | 단순 선형회귀 | 종사자 수 | 종사자 수와 매출액의 선형 관계를 직선으로 나타냄 |
+                    | 다중 선형회귀 | 종사자 수·사업체 수·연도 | 여러 독립변수의 관계를 함께 고려함 |
+                    | K-최근접 이웃 회귀(KNN) | 종사자 수·사업체 수·연도 | 특성이 가까운 학습 자료의 값을 활용해 예측함 |
+                    | 랜덤 포레스트 회귀 | 종사자 수·사업체 수·연도 | 여러 결정 트리의 예측을 종합함 |
+                    | XGBoost 회귀 | 종사자 수·사업체 수·연도 | 트리를 순차적으로 추가해 앞선 예측 오차를 보완함 |
+                    """
+                )
+                st.caption("동일 변수 조건의 주 비교 모델은 다중 선형회귀·KNN·랜덤 포레스트·XGBoost입니다. 단순 선형회귀는 종사자 수만 사용하는 보조 비교이므로 주 비교 모델과 변수 구성이 다르다는 점을 구분해 해석합니다. 모든 모델은 같은 학습·평가 행을 사용합니다.")
+            st.subheader("후보 모델 성능 비교")
+            st.write("MAE와 RMSE는 낮을수록 좋고, R²는 높을수록 좋습니다. 아래 수치로 후보 모델 간 차이를 비교할 수 있습니다.")
             st.dataframe(all_scores.sort_values("RMSE").round(4), use_container_width=True, hide_index=True)
             improvement=[]
             for _,r in model_scores.iterrows():
@@ -1698,6 +1730,68 @@ try:
                 "분할을 기준으로 합니다. 관측치가 많지 않고 같은 지역의 서로 다른 연도가 "
                 "학습·평가 데이터에 나뉘어 들어갈 수 있으므로, 결과를 미래 연도 예측이나 "
                 "인과관계의 증거로 해석해서는 안 됩니다."
+            )
+
+            st.subheader("최종 모델 선정 및 비교 기록")
+            # RMSE를 주된 선정 기준으로 삼되 MAE와 R²도 함께 기록
+            fair_model_names = ["다중 선형회귀", "K-최근접 이웃 회귀", "랜덤 포레스트 회귀", "XGBoost 회귀"]
+            fair_model_scores = model_scores[model_scores["모델"].isin(fair_model_names)]
+            if fair_model_scores.empty:
+                fair_model_scores = model_scores
+            selected_row = fair_model_scores.sort_values("RMSE").iloc[0]
+            st.write(
+                f"**선정 후보: {selected_row['모델']}** — 이번 평가 자료에서 RMSE가 "
+                f"가장 낮았기 때문에 우선 후보로 선정했습니다. 해당 모델의 MAE는 "
+                f"{selected_row['MAE']:,.4f}, RMSE는 {selected_row['RMSE']:,.4f}, "
+                f"R²는 {selected_row['R²']:.4f}입니다. 이 선정은 현재의 한 번의 "
+                "분할 결과에 한정되며, 다른 자료에서도 항상 가장 좋다는 뜻은 아닙니다."
+            )
+            rejected_rows = fair_model_scores[fair_model_scores["모델"] != selected_row["모델"]]
+            if not rejected_rows.empty:
+                st.markdown("**이번 비교에서 최종 우선 후보로 선택하지 않은 모델과 이유**")
+                for _, rejected in rejected_rows.iterrows():
+                    st.write(
+                        f"- **{rejected['모델']}**: RMSE가 {rejected['RMSE']:,.4f}로 "
+                        f"선정 후보({selected_row['RMSE']:,.4f})보다 높아 우선 후보에서 제외했습니다. "
+                        "이는 이번 평가 분할에서의 상대적 결과이며, 모델 자체가 항상 부적합하다는 뜻은 아닙니다."
+                    )
+            if excluded_models:
+                st.markdown("**실행 단계에서 비교 대상에서 제외된 모델**")
+                st.dataframe(pd.DataFrame(excluded_models), use_container_width=True, hide_index=True)
+            else:
+                st.caption("라이브러리 오류로 실행 단계에서 제외된 모델은 없습니다.")
+            st.info(
+                "기록용 요약: 회귀를 선택한 이유는 매출액이라는 연속형 수치를 예측하기 위해서이며, "
+                f"동일한 세 변수를 사용한 주 비교 모델 {len(fair_model_scores)}개를 같은 학습·평가 분할에서 비교했습니다. "
+                f"RMSE 기준 우선 후보는 {selected_row['모델']}입니다. 실제 GitHub 커밋은 "
+                "저장소에서 직접 수행해야 하며, 아래 비교 기록을 로그로 저장해 활용할 수 있습니다."
+            )
+            model_log_lines = [
+                "국내 애니메이션산업 매출액 예측 모델 비교 기록",
+                "분석 방법: 회귀 (매출액은 연속형 수치)",
+                "분할 조건: 학습 75%, 평가 25%, random_state=42",
+                "동일 변수 주 비교 모델: 다중 선형회귀, KNN, 랜덤 포레스트, XGBoost(설치된 경우)",
+                "단순 선형회귀는 종사자 수만 사용하는 보조 참고 모델",
+                "베이스라인: 학습 데이터 매출액 평균을 모든 평가 자료에 예측",
+                "선정 기준: RMSE 최저 모델을 우선 후보로 선정하고 MAE와 R²도 함께 확인",
+                f"우선 후보: {selected_row['모델']}",
+                f"MAE={selected_row['MAE']:.6f}, RMSE={selected_row['RMSE']:.6f}, R²={selected_row['R²']:.6f}",
+                "비교 모델 및 결과:"
+            ]
+            for _, log_row in model_scores.iterrows():
+                reason = "우선 후보" if log_row['모델'] == selected_row['모델'] else "RMSE가 우선 후보보다 높아 이번 평가에서는 최종 우선 후보로 선택하지 않음"
+                model_log_lines.append(
+                    f"- {log_row['모델']}: MAE={log_row['MAE']:.6f}, RMSE={log_row['RMSE']:.6f}, R²={log_row['R²']:.6f}; {reason}"
+                )
+            for excluded in excluded_models:
+                model_log_lines.append(f"- 제외 모델: {excluded['모델']}; 사유: {excluded['제외 이유']}")
+            model_log_lines.append("주의: 한 번의 무작위 분할 결과이며, 미래 연도 예측이나 인과관계를 보장하지 않음.")
+            model_log_text = "\n".join(model_log_lines)
+            st.download_button(
+                "모델 선택·제외 기록 로그 다운로드",
+                data=model_log_text,
+                file_name="모델_비교_선정_제외_기록.txt",
+                mime="text/plain"
             )
 
             metric=st.selectbox("비교할 평가 지표", ["RMSE","MAE","R²"], key="tab_model_metric")
