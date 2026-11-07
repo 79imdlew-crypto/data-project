@@ -1632,7 +1632,74 @@ try:
             for _,r in model_scores.iterrows():
                 improvement.append({"모델":r["모델"], "MAE 개선율(%)":(baseline_mae-r["MAE"])/baseline_mae*100 if baseline_mae else np.nan, "RMSE 개선율(%)":(baseline_rmse-r["RMSE"])/baseline_rmse*100 if baseline_rmse else np.nan, "기준선보다 RMSE가 낮은가":r["RMSE"]<baseline_rmse})
             st.subheader("기준선 대비 성능 개선")
-            st.dataframe(pd.DataFrame(improvement).round(2), use_container_width=True, hide_index=True)
+            improvement_df = pd.DataFrame(improvement)
+            st.dataframe(improvement_df.round(2), use_container_width=True, hide_index=True)
+
+            # 평가 지표의 의미와 실제 결과에 따른 해석
+            st.subheader("평가 결과 해석")
+            st.markdown(
+                """
+                - **MAE(평균 절대 오차)**: 예측값과 실제값의 차이를 절댓값으로 평균한 값입니다. 낮을수록 평균적인 예측 오차가 작습니다.
+                - **RMSE(평균 제곱근 오차)**: 오차를 제곱한 뒤 평균을 내고 제곱근을 취한 값입니다. 큰 오차에 더 민감하며, 낮을수록 좋습니다.
+                - **R²(결정계수)**: 모델이 실제 매출액의 변동을 얼마나 설명하는지 나타냅니다. 일반적으로 1에 가까울수록 좋으며, 0보다 작으면 단순히 실제값의 평균을 예측하는 기준보다도 성능이 낮을 수 있습니다.
+                """
+            )
+
+            best_rmse = model_scores.loc[model_scores["RMSE"].idxmin()]
+            best_mae = model_scores.loc[model_scores["MAE"].idxmin()]
+            best_r2 = model_scores.loc[model_scores["R²"].idxmax()]
+            st.write(
+                f"RMSE 기준으로 가장 낮은 오차를 보인 모델은 **{best_rmse['모델']}**이며, "
+                f"RMSE는 **{best_rmse['RMSE']:,.4f}**입니다. "
+                f"MAE 기준으로는 **{best_mae['모델']}**이 가장 낮은 "
+                f"**{best_mae['MAE']:,.4f}**를 기록했습니다. "
+                f"R² 기준으로는 **{best_r2['모델']}**이 가장 높은 "
+                f"**{best_r2['R²']:.4f}**를 기록했습니다."
+            )
+
+            st.markdown("**베이스라인과 비교한 해석**")
+            for _, row in model_scores.iterrows():
+                mae_change = (
+                    (baseline_mae - row["MAE"]) / baseline_mae * 100
+                    if baseline_mae != 0 else np.nan
+                )
+                rmse_change = (
+                    (baseline_rmse - row["RMSE"]) / baseline_rmse * 100
+                    if baseline_rmse != 0 else np.nan
+                )
+                if row["RMSE"] < baseline_rmse:
+                    comparison = "베이스라인보다 RMSE가 낮아 평가 데이터에서 오차가 감소했습니다."
+                elif row["RMSE"] > baseline_rmse:
+                    comparison = "베이스라인보다 RMSE가 높아 평가 데이터에서 오차가 커졌습니다."
+                else:
+                    comparison = "베이스라인과 RMSE가 같습니다."
+                mae_text = f"MAE는 {mae_change:+.2f}%" if pd.notna(mae_change) else "MAE 개선율은 계산할 수 없습니다"
+                rmse_text = f"RMSE는 {rmse_change:+.2f}%" if pd.notna(rmse_change) else "RMSE 개선율은 계산할 수 없습니다"
+                st.write(
+                    f"- **{row['모델']}**: {comparison} "
+                    f"베이스라인 대비 {mae_text}, {rmse_text}입니다."
+                )
+
+            if best_rmse["RMSE"] < baseline_rmse:
+                st.success(
+                    f"현재 평가 분할에서는 RMSE가 가장 낮은 **{best_rmse['모델']}**을 "
+                    "우선 후보로 볼 수 있습니다. 다만 한 번의 데이터 분할 결과이므로 "
+                    "최종적으로 일반화 성능이 가장 좋다고 단정할 수는 없습니다."
+                )
+            else:
+                st.warning(
+                    "이번 평가 분할에서는 어떤 후보 모델도 베이스라인보다 낮은 RMSE를 "
+                    "기록하지 못했습니다. 따라서 복잡한 모델이 평균 예측 기준선보다 "
+                    "더 낫다고 판단하기 어렵습니다."
+                )
+
+            st.info(
+                "이 결과는 현재 확보한 2020~2022년 지역별 자료와 한 번의 무작위 학습·평가 "
+                "분할을 기준으로 합니다. 관측치가 많지 않고 같은 지역의 서로 다른 연도가 "
+                "학습·평가 데이터에 나뉘어 들어갈 수 있으므로, 결과를 미래 연도 예측이나 "
+                "인과관계의 증거로 해석해서는 안 됩니다."
+            )
+
             metric=st.selectbox("비교할 평가 지표", ["RMSE","MAE","R²"], key="tab_model_metric")
             chart=px.bar(all_scores, x="모델", y=metric, color="모델", text_auto=".3f", title=f"기준선과 모델별 {metric} 비교")
             chart.update_layout(showlegend=False)
