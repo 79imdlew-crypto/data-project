@@ -505,8 +505,8 @@ except Exception as e:
 # =====================================================
 # 상단 메뉴: 질문 / 데이터 분석 / 기준선 / 모델 평가
 # =====================================================
-tab_question, tab_analysis, tab_baseline, tab_evaluation = st.tabs(
-    ["1. 질문", "2. 데이터 분석", "3. 기준선", "4. 모델 평가"]
+tab_question, tab_analysis, tab_baseline, tab_evaluation, tab_improvement = st.tabs(
+    ["1. 질문", "2. 데이터 분석", "3. 기준선", "4. 모델 평가", "5. 성능 개선"]
 )
 
 with tab_question:
@@ -1573,10 +1573,18 @@ try:
     from sklearn.dummy import DummyRegressor
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-    model_data = data[["지역명", "연도", "종사자수", "사업체수", "매출액"]].copy()
+    model_data_raw = data[["지역명", "연도", "종사자수", "사업체수", "매출액"]].copy()
     for col in ["연도", "종사자수", "사업체수", "매출액"]:
-        model_data[col] = pd.to_numeric(model_data[col], errors="coerce")
-    model_data = model_data.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+        model_data_raw[col] = pd.to_numeric(model_data_raw[col], errors="coerce")
+    model_data_raw = model_data_raw.replace([np.inf, -np.inf], np.nan)
+    missing_rows = int(model_data_raw.isna().any(axis=1).sum())
+    duplicate_rows = int(model_data_raw.duplicated().sum())
+    model_data = (
+        model_data_raw.dropna()
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+    negative_sales_rows = int((model_data["매출액"] < 0).sum())
 
     if len(model_data) < 12:
         with tab_baseline:
@@ -1822,16 +1830,159 @@ try:
             else:
                 st.warning("이번 평가 분할에서는 어떤 모델도 기준선보다 낮은 RMSE를 기록하지 못했습니다.")
             st.info("자료가 2020~2022년의 지역별 관측치로 제한적입니다. 무작위 분할은 동일 지역의 다른 연도를 학습·평가에 나눌 수 있으므로 새로운 연도에 대한 예측 성능을 보장하지 않습니다. 결과는 탐색적 비교이며 인과관계를 증명하지 않습니다.")
+
+        # =====================================================
+        # 5. 성능 개선: 데이터 정제 및 타깃 로그 변환 후 재학습
+        # =====================================================
+        with tab_improvement:
+            st.header("5. 성능 개선")
+            st.write(
+                "기존 평가 결과를 바탕으로 결측·무한대·중복 자료를 점검하고, "
+                "매출액 분포의 큰 값이 학습에 미치는 영향을 완화하기 위해 "
+                "매출액에 log1p 변환을 적용한 뒤 모델을 다시 학습합니다. "
+                "예측 결과는 expm1로 원래 매출액 단위로 되돌려 기존 모델 및 기준선과 비교합니다."
+            )
+            st.subheader("데이터 적합성 점검 및 전처리 내역")
+            quality_cols = st.columns(4)
+            quality_cols[0].metric("전처리 전 행 수", f"{len(model_data_raw)}개")
+            quality_cols[1].metric("결측·무한대 포함 행", f"{missing_rows}개")
+            quality_cols[2].metric("중복 행", f"{duplicate_rows}개")
+            quality_cols[3].metric("학습에 사용한 행", f"{len(model_data)}개")
+            st.write(
+                f"매출액이 음수인 행은 {negative_sales_rows}개입니다. "
+                "매출액이 음수가 아닌 경우에만 log1p 변환을 적용할 수 있습니다."
+            )
+            st.markdown(
+                "**수행한 전처리:** 숫자형 변환 후 무한대와 결측값이 포함된 행을 제거하고, "
+                "중복 행을 제거했습니다. 이어서 학습 데이터의 매출액에 log1p 변환을 적용했습니다. "
+                "로그 변환은 큰 매출액 값의 영향력을 완화할 수 있지만, 모든 데이터에서 "
+                "성능 향상을 보장하지는 않습니다."
+            )
+            if negative_sales_rows > 0:
+                st.error("매출액에 음수 값이 있어 log1p 변환을 안전하게 적용할 수 없습니다. 원자료의 값과 단위를 확인해야 하므로 개선 모델 재학습을 중단했습니다.")
+            else:
+                # 기존 모델과 동일한 분할 및 입력변수 조건을 사용하여 비교 가능성 유지
+                improved_rows, improved_predictions = [], {}
+                improved_model_specs = {
+                    "단순 선형회귀": (LinearRegression(), Xs_train, Xs_test),
+                    "다중 선형회귀": (LinearRegression(), Xm_train, Xm_test),
+                    "K-최근접 이웃 회귀": (make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=min(5, len(train_idx)))), Xm_train, Xm_test),
+                    "랜덤 포레스트 회귀": (RandomForestRegressor(n_estimators=300, random_state=42), Xm_train, Xm_test)
+                }
+                try:
+                    from xgboost import XGBRegressor
+                    improved_model_specs["XGBoost 회귀"] = (
+                        XGBRegressor(n_estimators=300, max_depth=3, learning_rate=0.03, subsample=0.9, colsample_bytree=0.9, objective="reg:squarederror", random_state=42, n_jobs=1),
+                        Xm_train, Xm_test
+                    )
+                except ImportError:
+                    pass
+
+                y_train_log = np.log1p(y_train)
+                for improved_name, (improved_estimator, improved_x_train, improved_x_test) in improved_model_specs.items():
+                    improved_estimator.fit(improved_x_train, y_train_log)
+                    predicted_log = improved_estimator.predict(improved_x_test)
+                    # 로그 공간 예측을 원래 매출액 단위로 복원하고 음수 예측은 0으로 제한
+                    improved_pred = np.maximum(np.expm1(predicted_log), 0)
+                    improved_predictions[improved_name] = improved_pred
+                    improved_rows.append({
+                        "모델": improved_name,
+                        "MAE": mean_absolute_error(y_test, improved_pred),
+                        "MSE": mean_squared_error(y_test, improved_pred),
+                        "RMSE": np.sqrt(mean_squared_error(y_test, improved_pred)),
+                        "R²": r2_score(y_test, improved_pred)
+                    })
+
+                improved_scores = pd.DataFrame(improved_rows)
+                st.subheader("전처리 후 재학습 결과")
+                st.dataframe(improved_scores.sort_values("RMSE").round(4), use_container_width=True, hide_index=True)
+                st.caption("평가 지표는 모두 원래 매출액 단위로 복원한 예측값을 기준으로 계산했습니다. 기존 모델과 같은 train/test 분할을 사용했습니다.")
+
+                # 같은 모델의 전처리 전후 비교
+                before_after = model_scores.merge(
+                    improved_scores,
+                    on="모델",
+                    suffixes=("_기존", "_개선")
+                )
+                before_after["RMSE 변화율(%)"] = (
+                    (before_after["RMSE_기존"] - before_after["RMSE_개선"])
+                    / before_after["RMSE_기존"].replace(0, np.nan) * 100
+                )
+                before_after["개선 여부"] = before_after["RMSE_개선"] < before_after["RMSE_기존"]
+                st.subheader("전처리 전·후 성능 비교")
+                st.dataframe(
+                    before_after[["모델", "MAE_기존", "MAE_개선", "MSE_기존", "MSE_개선", "RMSE_기존", "RMSE_개선", "R²_기존", "R²_개선", "RMSE 변화율(%)", "개선 여부"]].round(4),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                best_before = model_scores.sort_values("RMSE").iloc[0]
+                best_after = improved_scores.sort_values("RMSE").iloc[0]
+                st.subheader("성능 개선 결과 해석")
+                if best_after["RMSE"] < best_before["RMSE"]:
+                    gain = (best_before["RMSE"] - best_after["RMSE"]) / best_before["RMSE"] * 100 if best_before["RMSE"] else np.nan
+                    st.success(
+                        f"전처리 전 최저 RMSE 모델은 {best_before['모델']}({best_before['RMSE']:,.4f})이고, "
+                        f"전처리 후 최저 RMSE 모델은 {best_after['모델']}({best_after['RMSE']:,.4f})입니다. "
+                        f"최저 RMSE 기준으로 {gain:.2f}% 감소했습니다."
+                    )
+                else:
+                    st.warning(
+                        f"전처리 후 최저 RMSE는 {best_after['RMSE']:,.4f}로, "
+                        f"전처리 전 최저 RMSE({best_before['RMSE']:,.4f})보다 낮아지지 않았습니다. "
+                        "따라서 이번 로그 변환이 성능 개선으로 이어졌다고 보기 어렵습니다."
+                    )
+
+                if best_after["RMSE"] < baseline_rmse:
+                    st.write(
+                        f"전처리 후 우수 모델({best_after['모델']})은 기준선 RMSE "
+                        f"({baseline_rmse:,.4f})보다 낮은 RMSE를 기록했습니다."
+                    )
+                else:
+                    st.write(
+                        "전처리 후에도 가장 좋은 모델의 RMSE가 기준선보다 낮지 않습니다. "
+                        "현재 변수와 표본만으로는 평균 예측 기준선을 확실히 넘었다고 보기 어렵습니다."
+                    )
+                st.info(
+                    "해석상의 한계: 전처리 후에도 데이터는 2020~2022년 지역별 관측치로 제한적이며, "
+                    "평가 자료 수가 적을 수 있습니다. 같은 무작위 분할에서의 비교는 이번 데이터 내 성능을 "
+                    "살펴보는 데는 도움이 되지만, 새로운 연도나 다른 지역에 대한 일반화 성능을 보장하지 않습니다. "
+                    "성능이 개선되지 않았다면 이를 그대로 보고하고, 데이터가 충분히 크고 대표적인지 추가 검토해야 합니다."
+                )
+                improved_log = [
+                    "성능 개선 기록",
+                    "전처리: 숫자형 변환, 결측/무한대 행 제거, 중복 행 제거, 학습 타깃 매출액 log1p 변환",
+                    "평가: expm1로 원래 매출액 단위 복원 후 MAE/MSE/RMSE/R² 계산",
+                    f"동일 분할: train 75%, test 25%, random_state=42; 전체 사용 행 {len(model_data)}개",
+                    f"기존 최저 RMSE: {best_before['모델']} = {best_before['RMSE']:.6f}",
+                    f"개선 후 최저 RMSE: {best_after['모델']} = {best_after['RMSE']:.6f}",
+                    "모델별 전처리 전후 결과:"
+                ]
+                for _, result_row in before_after.iterrows():
+                    improved_log.append(
+                        f"- {result_row['모델']}: RMSE {result_row['RMSE_기존']:.6f} -> {result_row['RMSE_개선']:.6f}; "
+                        f"R² {result_row['R²_기존']:.6f} -> {result_row['R²_개선']:.6f}; 개선={bool(result_row['개선 여부'])}"
+                    )
+                st.download_button(
+                    "성능 개선 결과 기록 다운로드",
+                    data="\n".join(improved_log),
+                    file_name="성능_개선_결과_기록.txt",
+                    mime="text/plain"
+                )
 except ImportError as e:
     with tab_baseline:
         st.error(f"기준선·모델 학습 라이브러리를 불러오지 못했습니다: {e}. requirements.txt에 numpy와 scikit-learn을 추가하세요.")
     with tab_evaluation:
         st.error(f"모델 라이브러리 오류: {e}")
+    with tab_improvement:
+        st.error(f"성능 개선에 필요한 라이브러리를 불러오지 못했습니다: {e}")
 except Exception as e:
     with tab_baseline:
         st.error(f"기준선 계산 오류: {e}")
     with tab_evaluation:
         st.error(f"모델 학습 오류: {e}")
+    with tab_improvement:
+        st.error(f"성능 개선 계산 오류: {e}")
 
 
 with tab_analysis:
