@@ -1598,7 +1598,8 @@ try:
         baseline.fit(Xm_train, y_train)
         baseline_pred = baseline.predict(Xm_test)
         baseline_mae = mean_absolute_error(y_test, baseline_pred)
-        baseline_rmse = np.sqrt(mean_squared_error(y_test, baseline_pred))
+        baseline_mse = mean_squared_error(y_test, baseline_pred)
+        baseline_rmse = np.sqrt(baseline_mse)
         baseline_r2 = r2_score(y_test, baseline_pred)
 
         models = {
@@ -1623,9 +1624,9 @@ try:
             pred = estimator.predict(xte)
             fitted[name] = estimator
             preds[name] = pred
-            rows.append({"모델": name, "MAE": mean_absolute_error(y_test, pred), "RMSE": np.sqrt(mean_squared_error(y_test, pred)), "R²": r2_score(y_test, pred)})
+            rows.append({"모델": name, "MAE": mean_absolute_error(y_test, pred), "MSE": mean_squared_error(y_test, pred), "RMSE": np.sqrt(mean_squared_error(y_test, pred)), "R²": r2_score(y_test, pred)})
         model_scores = pd.DataFrame(rows)
-        baseline_scores = pd.DataFrame([{"모델":"기준선(평균 예측)", "MAE":baseline_mae, "RMSE":baseline_rmse, "R²":baseline_r2}])
+        baseline_scores = pd.DataFrame([{"모델":"기준선(평균 예측)", "MAE":baseline_mae, "MSE":baseline_mse, "RMSE":baseline_rmse, "R²":baseline_r2}])
         all_scores = pd.concat([baseline_scores, model_scores], ignore_index=True)
 
         with tab_baseline:
@@ -1637,7 +1638,7 @@ try:
             c2.metric("학습 데이터", f"{len(train_idx)}개")
             c3.metric("평가 데이터", f"{len(test_idx)}개")
             st.dataframe(baseline_scores.round(4), use_container_width=True, hide_index=True)
-            st.caption("MAE와 RMSE는 낮을수록 좋고, R²는 높을수록 좋습니다. 기준선의 R²가 음수일 수도 있습니다.")
+            st.caption("MAE·MSE·RMSE는 낮을수록 좋고, R²는 높을수록 좋습니다. 기준선의 R²가 음수일 수도 있습니다.")
             base_plot=pd.DataFrame({"실제 매출액":y_test.to_numpy(), "기준선 예측 매출액":baseline_pred})
             st.plotly_chart(px.scatter(base_plot, x="실제 매출액", y="기준선 예측 매출액", title="기준선: 실제값과 평균 예측값"), use_container_width=True)
 
@@ -1658,11 +1659,11 @@ try:
                 )
                 st.caption("동일 변수 조건의 주 비교 모델은 다중 선형회귀·KNN·랜덤 포레스트·XGBoost입니다. 단순 선형회귀는 종사자 수만 사용하는 보조 비교이므로 주 비교 모델과 변수 구성이 다르다는 점을 구분해 해석합니다. 모든 모델은 같은 학습·평가 행을 사용합니다.")
             st.subheader("후보 모델 성능 비교")
-            st.write("MAE와 RMSE는 낮을수록 좋고, R²는 높을수록 좋습니다. 아래 수치로 후보 모델 간 차이를 비교할 수 있습니다.")
+            st.write("MAE·MSE·RMSE는 낮을수록 좋고, R²는 높을수록 좋습니다. 아래 수치로 후보 모델 간 차이를 비교할 수 있습니다.")
             st.dataframe(all_scores.sort_values("RMSE").round(4), use_container_width=True, hide_index=True)
             improvement=[]
             for _,r in model_scores.iterrows():
-                improvement.append({"모델":r["모델"], "MAE 개선율(%)":(baseline_mae-r["MAE"])/baseline_mae*100 if baseline_mae else np.nan, "RMSE 개선율(%)":(baseline_rmse-r["RMSE"])/baseline_rmse*100 if baseline_rmse else np.nan, "기준선보다 RMSE가 낮은가":r["RMSE"]<baseline_rmse})
+                improvement.append({"모델":r["모델"], "MAE 개선율(%)":(baseline_mae-r["MAE"])/baseline_mae*100 if baseline_mae else np.nan, "MSE 개선율(%)":(baseline_mse-r["MSE"])/baseline_mse*100 if baseline_mse else np.nan, "RMSE 개선율(%)":(baseline_rmse-r["RMSE"])/baseline_rmse*100 if baseline_rmse else np.nan, "기준선보다 RMSE가 낮은가":r["RMSE"]<baseline_rmse})
             st.subheader("기준선 대비 성능 개선")
             improvement_df = pd.DataFrame(improvement)
             st.dataframe(improvement_df.round(2), use_container_width=True, hide_index=True)
@@ -1672,19 +1673,23 @@ try:
             st.markdown(
                 """
                 - **MAE(평균 절대 오차)**: 예측값과 실제값의 차이를 절댓값으로 평균한 값입니다. 낮을수록 평균적인 예측 오차가 작습니다.
-                - **RMSE(평균 제곱근 오차)**: 오차를 제곱한 뒤 평균을 내고 제곱근을 취한 값입니다. 큰 오차에 더 민감하며, 낮을수록 좋습니다.
+                - **MSE(평균 제곱 오차)**: 각 예측값과 실제값의 차이를 제곱한 뒤 평균한 값입니다. 오차가 클수록 제곱으로 인해 더 큰 영향을 받으며, 값이 작을수록 좋습니다. 단위도 매출액 단위의 제곱이 됩니다.
+                - **RMSE(평균 제곱근 오차)**: MSE에 제곱근을 취한 값입니다. 큰 오차에 더 민감하며, 매출액과 같은 단위를 사용합니다. 낮을수록 좋습니다.
                 - **R²(결정계수)**: 모델이 실제 매출액의 변동을 얼마나 설명하는지 나타냅니다. 일반적으로 1에 가까울수록 좋으며, 0보다 작으면 단순히 실제값의 평균을 예측하는 기준보다도 성능이 낮을 수 있습니다.
                 """
             )
 
             best_rmse = model_scores.loc[model_scores["RMSE"].idxmin()]
             best_mae = model_scores.loc[model_scores["MAE"].idxmin()]
+            best_mse = model_scores.loc[model_scores["MSE"].idxmin()]
             best_r2 = model_scores.loc[model_scores["R²"].idxmax()]
             st.write(
                 f"RMSE 기준으로 가장 낮은 오차를 보인 모델은 **{best_rmse['모델']}**이며, "
                 f"RMSE는 **{best_rmse['RMSE']:,.4f}**입니다. "
                 f"MAE 기준으로는 **{best_mae['모델']}**이 가장 낮은 "
                 f"**{best_mae['MAE']:,.4f}**를 기록했습니다. "
+                f"MSE 기준으로는 **{best_mse['모델']}**이 가장 낮은 "
+                f"**{best_mse['MSE']:,.4f}**를 기록했습니다. "
                 f"R² 기준으로는 **{best_r2['모델']}**이 가장 높은 "
                 f"**{best_r2['R²']:.4f}**를 기록했습니다."
             )
@@ -1694,6 +1699,10 @@ try:
                 mae_change = (
                     (baseline_mae - row["MAE"]) / baseline_mae * 100
                     if baseline_mae != 0 else np.nan
+                )
+                mse_change = (
+                    (baseline_mse - row["MSE"]) / baseline_mse * 100
+                    if baseline_mse != 0 else np.nan
                 )
                 rmse_change = (
                     (baseline_rmse - row["RMSE"]) / baseline_rmse * 100
@@ -1706,10 +1715,11 @@ try:
                 else:
                     comparison = "베이스라인과 RMSE가 같습니다."
                 mae_text = f"MAE는 {mae_change:+.2f}%" if pd.notna(mae_change) else "MAE 개선율은 계산할 수 없습니다"
+                mse_text = f"MSE는 {mse_change:+.2f}%" if pd.notna(mse_change) else "MSE 개선율은 계산할 수 없습니다"
                 rmse_text = f"RMSE는 {rmse_change:+.2f}%" if pd.notna(rmse_change) else "RMSE 개선율은 계산할 수 없습니다"
                 st.write(
                     f"- **{row['모델']}**: {comparison} "
-                    f"베이스라인 대비 {mae_text}, {rmse_text}입니다."
+                    f"베이스라인 대비 {mae_text}, {mse_text}, {rmse_text}입니다."
                 )
 
             if best_rmse["RMSE"] < baseline_rmse:
@@ -1775,13 +1785,13 @@ try:
                 "베이스라인: 학습 데이터 매출액 평균을 모든 평가 자료에 예측",
                 "선정 기준: RMSE 최저 모델을 우선 후보로 선정하고 MAE와 R²도 함께 확인",
                 f"우선 후보: {selected_row['모델']}",
-                f"MAE={selected_row['MAE']:.6f}, RMSE={selected_row['RMSE']:.6f}, R²={selected_row['R²']:.6f}",
+                f"MAE={selected_row['MAE']:.6f}, MSE={selected_row['MSE']:.6f}, RMSE={selected_row['RMSE']:.6f}, R²={selected_row['R²']:.6f}",
                 "비교 모델 및 결과:"
             ]
             for _, log_row in model_scores.iterrows():
                 reason = "우선 후보" if log_row['모델'] == selected_row['모델'] else "RMSE가 우선 후보보다 높아 이번 평가에서는 최종 우선 후보로 선택하지 않음"
                 model_log_lines.append(
-                    f"- {log_row['모델']}: MAE={log_row['MAE']:.6f}, RMSE={log_row['RMSE']:.6f}, R²={log_row['R²']:.6f}; {reason}"
+                    f"- {log_row['모델']}: MAE={log_row['MAE']:.6f}, MSE={log_row['MSE']:.6f}, RMSE={log_row['RMSE']:.6f}, R²={log_row['R²']:.6f}; {reason}"
                 )
             for excluded in excluded_models:
                 model_log_lines.append(f"- 제외 모델: {excluded['모델']}; 사유: {excluded['제외 이유']}")
@@ -1794,7 +1804,7 @@ try:
                 mime="text/plain"
             )
 
-            metric=st.selectbox("비교할 평가 지표", ["RMSE","MAE","R²"], key="tab_model_metric")
+            metric=st.selectbox("비교할 평가 지표", ["RMSE", "MAE", "MSE", "R²"], key="tab_model_metric")
             chart=px.bar(all_scores, x="모델", y=metric, color="모델", text_auto=".3f", title=f"기준선과 모델별 {metric} 비교")
             chart.update_layout(showlegend=False)
             st.plotly_chart(chart, use_container_width=True)
